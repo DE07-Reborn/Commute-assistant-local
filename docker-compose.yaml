@@ -4,6 +4,7 @@ networks:
 
 volumes:
   postgres-db-volume:
+  redis-data:
 
 # Airflow 
 x-airflow-common:
@@ -49,6 +50,7 @@ services:
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 10s
+      timeout: 5s
       retries: 5
     restart: always
 
@@ -62,6 +64,7 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
+      timeout: 5s
       retries: 5
     restart: always
 
@@ -143,24 +146,40 @@ services:
       - "8080:8080"
     depends_on:
       - airflow-init
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
     restart: always
 
   airflow-scheduler:
     <<: *airflow-common
     container_name: airflow-scheduler
     command: scheduler
+    healthcheck:
+      test: ["CMD", "airflow", "jobs", "check", "--job-type", "SchedulerJob", "--hostname", "$${HOSTNAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     restart: always
 
   airflow-worker:
     <<: *airflow-common
     container_name: airflow-worker
     command: celery worker
+    healthcheck:
+      test: ["CMD", "celery", "--app", "airflow.providers.celery.executors.celery_executor.app", "inspect", "ping", "-d", "celery@$${HOSTNAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     restart: always
 
   airflow-init:
     <<: *airflow-common
     entrypoint: /bin/bash
-    # yamllint disable rule:line-length
     command:
       - -c
       - |
@@ -207,9 +226,8 @@ services:
           echo
         fi
         mkdir -p /sources/logs /sources/dags /sources/plugins /sources/data
-        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins, data}
+        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins,data}
         exec /entrypoint airflow version
-    # yamllint enable rule:line-length
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
@@ -220,4 +238,3 @@ services:
     user: "0:0"
     volumes:
       - ${AIRFLOW_PROJ_DIR:-.}:/sources
-
