@@ -41,12 +41,6 @@ class s3_util:
             region_name = aws_region,
         )
 
-        self.filesystem = pa.fs.S3FileSystem(
-            access_key = aws_key_id,
-            secret_key = aws_secret_key,
-            region = aws_region,
-        )
-
 
 
     # Methods
@@ -73,30 +67,13 @@ class s3_util:
             raise ValueError(f"Unsupported input type: {input_type}")
 
         # get read all data within path and format
+        if input_fmt == "json":
+            return self._read_json(path, return_type)
+
         s3_uri = f"s3://{self.bucket}/{path}"
-
-        if input_fmt == 'json':
-            obj = self.s3.get_object(Bucket=self.bucket, Key=path)
-            body = obj["Body"].read().decode("utf-8")
-            data = json.loads(body)
-
-            if return_type == "pandas_df":
-                return pd.json_normalize(data)
-
-            elif return_type == "arrow_table":
-                if isinstance(data, list):
-                    return pa.Table.from_pylist(data)
-                else:
-                    return pa.Table.from_pylist([data])
-
-            else:
-                logging.info(f"Unsupported return type: {return_type} for json")
-                raise ValueError(f"Unsupported return type: {return_type}")
-
         dataset = ds.dataset(
             s3_uri,
-            format=input_fmt,
-            filesystem=self.filesystem
+            format=input_fmt
         )
 
         table = dataset.to_table()
@@ -114,6 +91,31 @@ class s3_util:
                 f'Should be arrow_table or spark_df'
             )
             raise ValueError(f"Unsupported return type: {return_type}")
+
+
+
+    def _read_json(self, path, return_type):
+        obj = self.s3.get_object(Bucket=self.bucket, Key=path)
+        body = obj["Body"].read().decode("utf-8")
+        data = json.loads(body)
+
+        # pandas dataframe
+        if return_type == "pandas_df":
+            if isinstance(data, dict):
+                return pd.json_normalize([data])
+            elif isinstance(data, list):
+                return pd.json_normalize(data)
+            else:
+                logging.info("Cannot convert format fit to pandas_df")
+                raise ValueError("Cannot convert format fit to pandas_df")
+
+        # arrow table
+        if return_type == "arrow_table":
+            if isinstance(data, dict):
+                data = [data]
+            return pa.Table.from_pylist(data)
+
+        raise ValueError(f"Unsupported return type for JSON: {return_type}")
 
 
 
