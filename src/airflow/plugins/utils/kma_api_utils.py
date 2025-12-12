@@ -156,12 +156,3 @@ class kma_api_collector:
         except Exception as e:
             logging.exception("Unexpected error caught while requesting KMA API")
             raise
-
-
-
-if __name__ == '__main__':
-    from dotenv import load_dotenv
-    load_dotenv()
-    collector = kma_api_collector('2025-12-11', '1630')
-    df = collector.request_daily_weather()
-    df.to_csv('tmp.csv')
