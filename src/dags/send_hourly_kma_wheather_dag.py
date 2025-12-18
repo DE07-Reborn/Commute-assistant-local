@@ -8,13 +8,12 @@ import pendulum
 import logging
 from datetime import timedelta
 
-def request_and_send_api(**context):
+def request_and_send_api():
     """
         Request hourly weather data from kma
         Extract only data and send it to Kafka Topic
     """
-    execution_date = context['logical_date']
-
+    
     # Initialize Kma api collector with execution date
     kma_collector = Kma_api_collector()
     kafka_producer = Kafka_producer_utils()
