@@ -43,6 +43,8 @@ x-airflow-common: &airflow-common
       condition: service_healthy
     redis:
       condition: service_healthy
+    kafka:
+      condition: service_started
 
 # =========================
 # Services
@@ -84,50 +86,72 @@ services:
     restart: always
 
   # ---------- Kafka ----------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: zookeeper
+    networks:
+      - pipeline-net
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    restart: always
+    
+    
   kafka:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:7.6.1
     container_name: kafka
     networks:
       - pipeline-net
+    depends_on:
+      - zookeeper
     ports:
       - "9092:9092"
     environment:
-      CLUSTER_ID: local-cluster
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://0.0.0.0:9092,CONTROLLER://kafka:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092
+
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 72
     volumes:
       - kafka-data:/var/lib/kafka/data
     restart: always
 
   # ---------- Spark Master ----------
   spark-master:
-    image: apache/spark:3.5.1
+    build:
+      context: ./docker/spark  
+      dockerfile: Dockerfile
     container_name: spark-master
+    env_file:
+    - .env
     networks:
       - pipeline-net
     command: >
       /opt/spark/bin/spark-class
-      org.apache.spark.deploy.master.Master
+      org.apache.spark.deploy.master.Master 
     ports:
       - "7077:7077"
       - "8081:8080"
     environment:
-      PYTHONPATH: /opt/project/src/lib
+      PYTHONPATH: /opt/project/src
+      SPARK_SUBMIT_OPTS: "-Dspark.jars.ivy=/tmp/ivy"
+      AWS_REGION: ${AWS_REGION}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     volumes:
       - ./src:/opt/project/src
     restart: always
 
   # ---------- Spark Worker ----------
   spark-worker:
-    image: apache/spark:3.5.1
+    build:
+      context: ./docker/spark  
+      dockerfile: Dockerfile
     container_name: spark-worker
     networks:
       - pipeline-net
@@ -138,7 +162,7 @@ services:
     environment:
       SPARK_WORKER_MEMORY: 1g
       SPARK_WORKER_CORES: 2
-      PYTHONPATH: /opt/project/src/lib
+      PYTHONPATH: /opt/project/src
     volumes:
       - ./src:/opt/project/src
     depends_on:
@@ -185,3 +209,26 @@ services:
           --role Admin \
           --email admin@example.com
     user: "0:0"
+
+
+  spark-weather-streaming:
+    build:
+      context: ./docker/spark
+      dockerfile: Dockerfile
+    container_name: spark-weather-streaming
+    networks:
+      - pipeline-net
+    env_file:
+      - .env
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --conf spark.jars.ivy=/tmp/ivy
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.hadoop:hadoop-aws:3.3.4
+      /opt/project/src/spark/jobs/consume_weather_streaming.py
+    volumes:
+      - ./src:/opt/project/src
+    depends_on:
+      - spark-master
+      - kafka
+    restart: always

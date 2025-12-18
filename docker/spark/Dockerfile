@@ -7,7 +7,7 @@ RUN apt-get update && \
     gcc \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
-    
+
 COPY requirements.txt /requirements.txt
 
 RUN pip install --upgrade pip && \
@@ -15,4 +15,5 @@ RUN pip install --upgrade pip && \
 
 WORKDIR /opt/spark/jobs
 
-USER 1001
+ENV PYSPARK_PYTHON=/usr/bin/python3
+ENV PYSPARK_DRIVER_PYTHON=/usr/bin/python3

@@ -1,5 +1,5 @@
 from utils.preprocessing_utils import Preprocessing
-from utils.kma_api_utils import Kma_api_collector
+from utils.kma_api_tool_utils import Kma_api_collector
 from utils.s3_utils import S3_utils
 
 from airflow import DAG
@@ -23,7 +23,7 @@ def request_kma_stn_meta(**context):
 
     # S3 Connection and save into s3 as csv
     s3_connector = S3_utils(ymd, hm)
-    s3_connector.upload(df, 'stn-metadata')
+    s3_connector.upload_stn_metadata(df)
 
 
 
@@ -35,14 +35,13 @@ with DAG(
     schedule_interval="0 0 1 1,7 *",
     catchup = False,
     max_active_runs=1,
-    tags=["kma", "metadata", "s3"],
+    tags=["kma_stn", "metadata", "s3"],
 ) as dag:
     
     # Request API then store metadata into S3 by csv
     request_and_save_s3 = PythonOperator(
         task_id = 'api_to_s3',
         python_callable = request_kma_stn_meta,
-        provide_context=True
     )
 
     request_and_save_s3
