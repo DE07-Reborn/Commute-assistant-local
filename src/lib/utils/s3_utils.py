@@ -1,4 +1,7 @@
-import os, boto3, logging, io
+import os
+import boto3
+import logging
+import io
 
 
 class S3_utils:
