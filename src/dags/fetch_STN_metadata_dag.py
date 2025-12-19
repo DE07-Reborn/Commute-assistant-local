@@ -18,7 +18,7 @@ def request_kma_stn_meta(**context):
 
     # Initialize Kma api collector with execution date
     ymd, hm = Preprocessing().split_time_context(execution_date)
-    kma_collector = Kma_api_collector(ymd, hm)
+    kma_collector = Kma_api_collector()
     df = kma_collector.request_stn_metadata()
 
     # S3 Connection and save into s3 as csv

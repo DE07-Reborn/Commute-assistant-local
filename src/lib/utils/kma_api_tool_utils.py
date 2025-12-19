@@ -9,16 +9,10 @@ class Kma_api_collector:
         Request kma apihub to get STN metadata
     """
 
-    def __init__(self, ymd, hm):
+    def __init__(self):
         """
             Initialize api collector
-            param
-                ymd : Year-Month-Day
-                hm : HourMinute
         """
-
-        self.ymd = ymd.replace('-', '')
-        self.hm = hm
 
         # set API Key
         self.key = os.getenv("KMA_KEY")
@@ -35,7 +29,6 @@ class Kma_api_collector:
         """
         stn_url = 'https://apihub.kma.go.kr/api/typ01/url/stn_inf.php'
         stn_params = {
-            'tm' : self.ymd+self.hm,
             'help' : 0,
             'authKey' : self.key
         }

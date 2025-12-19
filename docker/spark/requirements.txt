@@ -3,3 +3,5 @@ numpy==1.24.3
 
 kafka-python==2.0.2
 confluent-kafka==2.3.0
+
+redis==5.0.1

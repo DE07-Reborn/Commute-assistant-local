@@ -1,7 +1,6 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from utils.preprocessing_utils import Preprocessing
 from utils.kma_api_tool_utils import Kma_api_collector
 from utils.kafka_utils import Kafka_producer_utils
 
@@ -9,16 +8,14 @@ import pendulum
 import logging
 from datetime import timedelta
 
-def request_and_send_api(**context):
+def request_and_send_api():
     """
         Request hourly weather data from kma
         Extract only data and send it to Kafka Topic
     """
-    execution_date = context['logical_date']
-
+    
     # Initialize Kma api collector with execution date
-    ymd, hm = Preprocessing().split_time_context(execution_date)
-    kma_collector = Kma_api_collector(ymd, hm)
+    kma_collector = Kma_api_collector()
     kafka_producer = Kafka_producer_utils()
 
     text = kma_collector.request_live_weather()
@@ -56,7 +53,7 @@ KST = pendulum.timezone("Asia/Seoul")
 with DAG(
     dag_id = 'send_hourly_weather_to_kafka',
     start_date=pendulum.datetime(2025, 1, 1, 0, 0, tz=KST),
-    schedule_interval="0 * * * *",
+    schedule_interval="5 * * * *",
     catchup = False,
     max_active_runs=1,
     tags=["Hourly", "Weather", "kafka"],
