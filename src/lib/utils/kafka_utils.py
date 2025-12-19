@@ -1,5 +1,6 @@
 from kafka import KafkaProducer
 import json
+import logging
 
 
 class Kafka_producer_utils:
@@ -16,7 +17,10 @@ class Kafka_producer_utils:
             acks="all",
             retries=3,
             linger_ms=50,
+            batch_size=16384, 
+            buffer_memory=33554432,  # 32MB
             request_timeout_ms=30000, # 30sec
+            max_in_flight_requests_per_connection=5,
         )
 
 
@@ -28,12 +32,16 @@ class Kafka_producer_utils:
                 key : key value of message
                 message : message
         """
-        self.producer.send(
-            topic = topic,
-            key = key,
-            value = message
-        ).get(timeout=10)
-        
+        try:
+            self.producer.send(
+                topic=topic,
+                key=key,
+                value=message
+            )
+            
+        except Exception as e:
+            logging.error(f"Error sending message to Kafka: {e}")
+            raise
 
 
     def close_kafka(self):
@@ -42,3 +50,4 @@ class Kafka_producer_utils:
         """
         self.producer.flush()
         self.producer.close()
+        logging.info("Kafka producer closed")

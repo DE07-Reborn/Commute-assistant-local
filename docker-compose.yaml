@@ -9,6 +9,7 @@ volumes:
   postgres-db-volume:
   redis-data:
   kafka-data:
+  redis-cache-data:
 
 # =========================
 # Airflow Common
@@ -240,8 +241,8 @@ services:
   # ---------- fastAPI ----------
   fastapi:
     build:
-      context: .
-      dockerfile: ./docker/fastapi/Dockerfile
+      context: ./docker/fastapi/
+      dockerfile: Dockerfile
     container_name: fastapi
     networks:
       - pipeline-net
@@ -249,9 +250,32 @@ services:
       - .env
     volumes:
       - ./src:/opt/project/src
+    environment:
+      PYTHONPATH: /opt/project/src
+      AWS_REGION: ${AWS_REGION}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     command: >
       uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     depends_on:
-      - redis
+      - redis-cache
+
+# ----------- redis for cache ------------
+  redis-cache:
+    image: redis:7.2-bookworm
+    container_name: redis-cache
+    networks:
+      - pipeline-net
+    volumes:
+      - redis-cache-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    ports:
+      - "6380:6379"

@@ -40,7 +40,7 @@ def request_and_send_api():
         )
         
         sent_count += 1
-
+        
     kafka_producer.close_kafka()
     logging.info(f'Sent {sent_count} weather records to kafka')
 

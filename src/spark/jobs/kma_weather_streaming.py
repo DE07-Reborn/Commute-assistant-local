@@ -7,9 +7,6 @@ log = logging.getLogger("weather-streaming")
 def main():
     spark_utils = Spark_utils()
     spark = spark_utils.get_spark("kma_hourly_weather")
-    
-    checkpoint = "kma-weather/_checkpoint"
-    s3_folder = "kma-weather/hourly-data"
 
     # read recent data from kafka topic : batch
     raw_data = spark_utils.read_kafka_topic(spark, 'hourly_weather_raw')
@@ -21,23 +18,27 @@ def main():
     # 음악 / 도서 추천 알고리즘
     ## 여기 추가 예정
 
-    # send to Redis (Update by key:stn_id) within partition
-    # Redis문제 해결 해야해요
+    # send to Redis (Update by key:stn_id) within partition(1)
+    df_redis = df.repartition(1)
+    redis_checkpoint = f"s3a://{spark_utils.bucket}/kma-weather/_checkpoint_redis"    
     (
-        df.writeStream
-        .foreachBatch(
-            lambda batch_df, batch_id: 
-                spark_utils.write_df_to_redis(
-                    batch_df
-                )
-        )
+        df_redis.writeStream
+        .foreachBatch(spark_utils.save_batch_to_redis)
         .outputMode("append")
-        .option("checkpointLocation", "kma-weather/_checkpoint_redis")
+        .option("checkpointLocation", redis_checkpoint)
         .start()
     )
 
     # save to S3
-    spark_utils.save_to_s3(df, s3_folder, checkpoint)
+    s3_checkpoint = f"s3a://{spark_utils.bucket}/kma-weather/_checkpoint_s3"
+    (
+        df.writeStream
+        .foreachBatch(spark_utils.save_batch_to_s3)
+        .outputMode("append")
+        .option("checkpointLocation", s3_checkpoint)
+        .start()
+    )
+    log.info("------------S3 stream started-------------")
 
 
     log.info("Weather streaming started. Waiting termination...")

@@ -6,6 +6,7 @@ from pyspark.sql.functions import (
 
 import redis
 import json
+import logging
 
 from pyspark.sql.types import StructType, StructField, StringType
 import os
@@ -19,6 +20,12 @@ class Spark_utils:
         self.bucket = os.getenv("AWS_S3_BUCKET")
         if not self.bucket:
             raise RuntimeError("AWS_S3_BUCKET env var is required")
+        
+        logging.basicConfig(level=logging.INFO)
+        self.log = logging.getLogger("spark-utils")
+
+        self.redis_host = os.getenv("REDIS_HOST")
+        self.redis_port = int(os.getenv("REDIS_PORT"))
         
 
     def get_spark(self, appName):
@@ -35,6 +42,8 @@ class Spark_utils:
             .config("spark.hadoop.fs.s3a.aws.credentials.provider", 
                     "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
             .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+            .config("spark.redis.host", self.redis_host)
+            .config("spark.redis.port", str(self.redis_port)) 
             .getOrCreate()
         )
     
@@ -147,58 +156,73 @@ class Spark_utils:
             )
         )
 
-    def save_to_s3(self, df, folder, checkpoint, _format = 'parquet'):
-        """
-            Save spark dataframe as  format in s3 folder with checkpoint
-            param
-                df : spark dataset
-                folder : the directory name of data
-                checkpoint : Check point info of data within spark/kafka
-                _format : The format of dataset store into S3
-        """
-        (
-            df
-            .writeStream
-            .format(_format)
-            .option('path', f"s3a://{self.bucket}/{folder}")
-            .option("checkpointLocation", checkpoint)
-            .outputMode("append")
-            .start()
-        )
 
-
-    def save_partition_to_redis(self, partition, redis_host="redis", redis_port=6379):
+    def save_batch_to_s3(self, batch_df, batch_id):
+        """
+            Save spark dataframe as parquet in s3 folder
+        """
         try:
+            count = batch_df.count()
+            s3_path = f"s3a://{self.bucket}/kma-weather/hourly-data"
+            
+            self.log.info(f"Batch {batch_id}: Writing {count} records to S3...")
+            
+            (
+                batch_df
+                .write
+                .mode("append")
+                .partitionBy("obs_yyyymmddhh")
+                .parquet(s3_path)
+            )
+            
+            self.log.info(f"Batch {batch_id}: Successfully saved {count} records to S3 - {s3_path}")
+            
+        except Exception as e:
+            self.log.error(f"Batch {batch_id}: S3 write error: {e}")
+            raise
+
+
+    def save_batch_to_redis(self, batch_df, batch_id):
+        try:
+            rows = batch_df.collect()
+
+            if not rows:
+                self.log.info(f'Batch {batch_id}: No data to write to Redis')
+                return
+            
             r = redis.Redis(
-                host=redis_host,
-                port=redis_port,
+                host=self.redis_host,
+                port=self.redis_port,
                 decode_responses=True
             )
-            pipe = r.pipeline()
-
-            for row in partition:
-                key = f"weather:stn:{row['stn_id']}"
-                value = json.dumps(row.asDict())
-                pipe.set(key, value)
-
-            pipe.execute()
-
+            for row in rows:
+                try:
+                    weather_data = {
+                        # 관측시간(obs_time), 기온(TA), 습도(hm), 현재일기(wc), 강수유무(pop), 하늘상태(sky)
+                        'obs_time': row['obs_time'] or '',
+                        'ta': str(row['ta']) if row['ta'] is not None else '',
+                        'hm': str(row['hm']) if row['hm'] is not None else '',
+                        'wc': str(row['wc']) if row['wc'] is not None else '',
+                        'pop': str(row['pop']) if row['pop'] is not None else '',
+                        'sky': str(row['sky']) if row['sky'] is not None else '',
+                        # 도서 및 음악 추천 결과 저장
+                    }
+                    
+                    # Store in Redis as key : kma-stn:stn_id
+                    key = f"kma-stn:{row['stn_id']}"
+                    r.hset(key, mapping=weather_data)
+                    
+                    # TTL 24 hours
+                    r.expire(key, 86400)
+                    
+                    self.log.info(f"Batch {batch_id}: Saved to Redis - {key}")
+                    
+                except Exception as row_error:
+                    self.log.error(f"Batch {batch_id}: Error saving row to Redis: {row_error}")
+                    continue
+            
+            self.log.info(f"Batch {batch_id}: Successfully saved {len(rows)} records to Redis")
+            
         except Exception as e:
-            print(f"Redis write error: {e}")
-
-        
-    def write_df_to_redis(self, df, redis_host='redis', redis_port=6379):
-        """
-            For each partition in dataframe, save it into redis
-            parmam
-                df : DataFrame
-                redis_host : host name of redis
-                redis_port : port number of redis
-        """
-        df.foreachPartition(
-            lambda partition : self.save_partition_to_redis(
-                partition=partition, 
-                redis_host=redis_host, 
-                redis_port=redis_port
-            )
-        )
+            self.log.error(f"Batch {batch_id}: Redis batch write error: {e}")
+            raise
