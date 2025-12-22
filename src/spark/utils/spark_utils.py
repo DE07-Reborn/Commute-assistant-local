@@ -225,3 +225,48 @@ class Spark_utils:
         except Exception as e:
             self.log.error(f"Batch {batch_id}: Redis batch write error: {e}")
             raise
+
+    def weather_to_class(self, session, file_path, weather_df):
+        weather_df.createOrReplaceTempView("weather_df")
+        music_df = session.read.parquet(f"s3a://{self.bucket}/{file_path}")
+        music_df.createOrReplaceTempView("music_df")
+
+        # music_list의 경우 list형이기 때문에 이대로 csv나 parquet으로 저장하지 못함.
+        # json으로는 저장 가능
+        result_df = session.sql("""
+        with weather_convert AS(
+            SELECT *,
+            CASE WHEN month(obs_ts) BETWEEN 3 AND 5 THEN '봄'
+            WHEN month(obs_ts) BETWEEN 6 AND 8 THEN '여름'
+            WHEN month(obs_ts) BETWEEN 9 AND 11 THEN '가을'
+            ELSE '겨울'
+            END AS season,
+            CASE WHEN hour(obs_ts) BETWEEN 0 AND 6 THEN '새벽'
+            WHEN hour(obs_ts) BETWEEN 7 AND 11 THEN '오전'
+            WHEN hour(obs_ts) BETWEEN 12 AND 17 THEN '오후'
+            WHEN hour(obs_ts) BETWEEN 18 AND 24 THEN '밤'
+            END AS time_category,
+            CASE WHEN wc IN (70, 71, 72, 73, 74, 75, 76, 77, 78, 79) THEN '눈'
+            WHEN wc IN (50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99) THEN '비'
+            WHEN (season = '여름' AND ta >= 30 AND time_category IN ('오전', '오후')) OR (season = '여름' AND ta >= 25 AND time_category IN ('새벽', '밤')) THEN '더위'
+            WHEN sky = 5 THEN '흐림'
+            WHEN date_format(obs_ts, 'MM-dd') BETWEEN '02-25' AND '04-05'
+                    OR date_format(obs_ts, 'MM-dd') BETWEEN '08-25' AND '10-05'
+                THEN '환절기'
+            WHEN (time_category IN ('오전', '오후') AND ta BETWEEN 20 AND 26) OR (time_category = '밤' AND ta BETWEEN 18 AND 22) OR (time_category = '밤' AND ta BETWEEN 15 AND 20) THEN '선선'
+            ELSE '화창' END AS weather_category,
+            CONCAT(season, '-', time_category, '-', weather_category) AS weather_code
+            FROM weather_df
+        ),
+        weather_code_join AS(
+        SELECT a.stn_Id, collect_list((b.artists, b.album_name, b.track_name)) music_list
+        FROM weather_convert a
+        JOIN music_df b ON a.weather_code = b.weather_code
+        GROUP BY a.stn_id
+        )
+        SELECT a.*, b.music_list
+        FROM weather_convert a
+        JOIN weather_code_join b ON a.stn_id = b.stn_id
+        """)
+
+        return result_df

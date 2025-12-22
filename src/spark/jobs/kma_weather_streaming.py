@@ -18,6 +18,16 @@ def main():
     # 음악 / 도서 추천 알고리즘
     ## 여기 추가 예정
 
+    # 날씨 데이터를 토대로 이에 맞는 음악 리스트, 날씨코드가 결합된 형태의 데이터프레임 반환
+    # [{"artists":artists, "album_name":album_name, "track_name":track_name}, ...]의 딕셔너리 리스트 형태로 구성되어 있어
+    # 이대로 paquet으로 저장하면 내용물은 보이지 않고 object로만 표시됨
+    music_s3_path = 'raw_data/music/music_classified.parquet'
+    df = spark_utils.weather_to_class(session=spark, file_path=music_s3_path, weather_df=df)
+    # 최종 결과 데이터프레임. 이후 작업은 이 df로 진행하시면 됩니다
+    df
+
+    # send to Redis (Update by key:stn_id) within partition
+    # Redis문제 해결 해야해요
     # send to Redis (Update by key:stn_id) within partition(1)
     df_redis = df.repartition(1)
     redis_checkpoint = f"s3a://{spark_utils.bucket}/kma-weather/_checkpoint_redis"    
