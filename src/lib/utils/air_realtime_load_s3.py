@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 import boto3
-from utils.config import settings
+from utils.air_realtime_config import settings
 
 
 def save_raw_to_s3(

@@ -54,6 +54,8 @@ class Spark_utils:
                 "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
             .config("spark.hadoop.fs.s3a.connection.maximum", "80")
             .config("spark.hadoop.fs.s3a.path.style.access", "true")
+            .config("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+            .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com")
             # Stream
             .config("spark.streaming.stopGracefullyOnShutdown", "true")
             .config("spark.streaming.backpressure.enabled", "true")
@@ -66,10 +68,6 @@ class Spark_utils:
             # Redis
             .config("spark.redis.host", self.redis_host)
             .config("spark.redis.port", str(self.redis_port)) 
-            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-            .config("spark.hadoop.fs.s3a.access.key", self.aws_access_key) \
-            .config("spark.hadoop.fs.s3a.secret.key", self.aws_secret_access_key) \
-            .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com")
             .getOrCreate()
         )
     
@@ -518,3 +516,4 @@ class Spark_utils:
         except Exception as e:
             self.log.error(f"Batch {batch_id}: S3 write error: {e}")
             raise
+
