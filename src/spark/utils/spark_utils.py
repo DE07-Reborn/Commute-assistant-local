@@ -17,6 +17,8 @@ class Spark_utils:
 
     def __init__(self):
         self.bucket = os.getenv("AWS_S3_BUCKET")
+        self.aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+        self.aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
         if not self.bucket:
             raise RuntimeError("AWS_S3_BUCKET env var is required")
         
@@ -43,6 +45,10 @@ class Spark_utils:
             .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
             .config("spark.redis.host", self.redis_host)
             .config("spark.redis.port", str(self.redis_port)) 
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+            .config("spark.hadoop.fs.s3a.access.key", self.aws_access_key) \
+            .config("spark.hadoop.fs.s3a.secret.key", self.aws_secret_access_key) \
+            .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com")
             .getOrCreate()
         )
     
