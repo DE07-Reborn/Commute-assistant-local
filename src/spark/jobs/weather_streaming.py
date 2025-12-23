@@ -5,6 +5,10 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("weather-forecast-streaming")
 
 def run_weather_stream(spark_utils, spark):
+    """
+        The topic is received data every 10 minutes about 6hours 
+        weather forecast
+    """
 
     log.info("Initializing weather stream...")
 
@@ -40,6 +44,9 @@ def run_weather_stream(spark_utils, spark):
 
 
 def run_forecast_stream(spark_utils, spark):
+    """
+        Hourly(00:05) planned live climate data
+    """
 
     log.info("Initializing forecast stream...")
 
