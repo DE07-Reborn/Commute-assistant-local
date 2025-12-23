@@ -1,5 +1,5 @@
 import requests
-from utils.config import settings
+from utils.air_realtime_config import settings
 
 def extract_realtime(sido_name: str = "서울") -> dict:
     # API 호출에 필요한 파라미터 설정
