@@ -1,4 +1,4 @@
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, split, from_json, regexp_replace, 
     when, lit, to_timestamp, date_format, 

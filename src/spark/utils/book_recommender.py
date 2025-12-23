@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
 from functools import reduce
 
 from pyspark.sql import DataFrame, SparkSession
@@ -97,7 +96,7 @@ class BookRecommender:
         
         books = self.spark.read.parquet(self.booklist_path)
         
-        ebooks = books.filter(col("has_ebook") == True)
+        ebooks = books.filter(col("has_ebook"))
         
         w = Window.partitionBy("genre").orderBy(col("bestRank").cast("int").asc())
         
