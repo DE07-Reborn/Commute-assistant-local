@@ -2,7 +2,6 @@ import boto3
 import pandas as pd
 import redis
 from fastapi import FastAPI, HTTPException
-from datetime import datetime, date
 import io
 import os
 from io import StringIO
