@@ -27,10 +27,11 @@ def run_weather_stream(spark_utils, spark):
     df_with_recommendation = br.add_recommendation(df_weather)
 
     # Redis Sink
-    df_with_recommendation_redis = df_with_recommendation.repartition(1)
     redis_checkpoint = f"s3a://{spark_utils.bucket}/kma-weather/_checkpoint_redis"
     redis_query = (
-        df_with_recommendation.writeStream
+        df_with_recommendation
+        .repartition(1)
+        .writeStream
         .foreachBatch(spark_utils.save_batch_to_redis)
         .outputMode("append")
         .option("checkpointLocation", redis_checkpoint)
