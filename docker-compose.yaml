@@ -7,6 +7,7 @@ networks:
 
 volumes:
   postgres-db-volume:
+  postgres-app-volume:
   redis-data:
   kafka-data:
   redis-cache-data:
@@ -162,7 +163,7 @@ services:
       spark://spark-master:7077
     environment:
       SPARK_WORKER_MEMORY: 1g
-      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_CORES: 1
       PYTHONPATH: /opt/project/src
     volumes:
       - ./src:/opt/project/src
@@ -224,20 +225,20 @@ services:
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
-      --conf spark.jars.ivy=/tmp/ivy
+      --executor-memory 900m
+      --executor-cores 1
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.hadoop:hadoop-aws:3.3.4
-      /opt/project/src/spark/jobs/kma_weather_streaming.py
+      /opt/project/src/spark/jobs/weather_streaming.py
     volumes:
       - ./src:/opt/project/src
     environment:
-      SPARK_WORKER_MEMORY: 1g
-      SPARK_WORKER_CORES: 2
       PYTHONPATH: /opt/project/src
     depends_on:
       - spark-master
       - kafka
     restart: always
 
+  
   # ---------- fastAPI ----------
   fastapi:
     build:
@@ -279,3 +280,27 @@ services:
     restart: always
     ports:
       - "6380:6379"
+
+
+  # ----------- Postgres for App ---------------
+  postgres-app:
+    image: postgres:13
+    container_name: postgres-app
+    env_file:
+      - .env
+    networks:
+      - pipeline-net
+    volumes:
+      - postgres-app-volume:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${APP_DB_USER}
+      POSTGRES_PASSWORD: ${APP_DB_PSWD}
+      POSTGRES_DB: ${APP_DB_NAME}
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always

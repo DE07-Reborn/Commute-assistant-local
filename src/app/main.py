@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException
 import os
 from io import StringIO
 import math
+import json
 
 app = FastAPI(title='Service API')
 
@@ -98,3 +99,29 @@ def get_weather(lat, lon):
         'weather' : data
     }
 
+
+@app.get("/forecast")
+def get_forecast(home_address, work_address):
+    """
+        Request Redis to get forecast information of addresses
+        param
+            home_address : User's home address
+            work_address : User's work address
+    """
+    address_1 = f"forecast:{' '.join(home_address.split()[:2])}"
+    address_2 = f"forecast:{' '.join(work_address.split()[:2])}"
+
+    data_1 = redis_client.get(address_1)
+    data_2 = redis_client.get(address_2)
+
+    if data_1 is None:
+        raise HTTPException(status_code=404, detail=f'No data for station {address_1}')
+    if data_2 is None:
+        raise HTTPException(status_code=404, detail=f'No data for station {address_2}')
+
+    return {
+        'home_address' : address_1,
+        'value_1' : json.loads(data_1),
+        'work_address' : address_2,
+        'value_2' : json.loads(data_2)
+    }
