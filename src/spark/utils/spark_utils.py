@@ -2,12 +2,18 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, split, from_json, regexp_replace, 
     when, lit, to_timestamp, date_format, 
+    explode, min, max, avg, struct,
+    collect_list, expr
 )
 
+import json
 import redis
 import logging
 
-from pyspark.sql.types import StructType, StructField, StringType
+from pyspark.sql.types import (
+    StructType, StructField, 
+    StringType, IntegerType, ArrayType
+)
 import os
 
 class Spark_utils:
@@ -38,11 +44,26 @@ class Spark_utils:
         return (
             SparkSession.builder
             .appName(appName)
+            # General setup
             .master("spark://spark-master:7077")
             .config("spark.sql.session.timeZone", "Asia/Seoul")
-            .config("spark.hadoop.fs.s3a.aws.credentials.provider", 
-                    "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
             .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+            .config("spark.jars.ivy", "/tmp/ivy")
+            # S3
+            .config("spark.hadoop.fs.s3a.aws.credentials.provider",
+                "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+            .config("spark.hadoop.fs.s3a.connection.maximum", "80")
+            .config("spark.hadoop.fs.s3a.path.style.access", "true")
+            # Stream
+            .config("spark.streaming.stopGracefullyOnShutdown", "true")
+            .config("spark.streaming.backpressure.enabled", "true")
+            .config("spark.streaming.kafka.allowNonConsecutiveOffsets", "true")
+            .config("spark.streaming.kafka.consumer.poll.ms", "30000")
+            .config("spark.sql.adaptive.enabled", "true")
+            .config("spark.sql.shuffle.partitions", "4")
+            .config("spark.streaming.kafka.maxRatePerPartition", "800")
+
+            # Redis
             .config("spark.redis.host", self.redis_host)
             .config("spark.redis.port", str(self.redis_port)) 
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
@@ -63,7 +84,7 @@ class Spark_utils:
         return(
             spark_session.readStream
             .format("kafka")
-            .option("kafka.bootstrap.servers", "kafka:19092")
+            .option("kafka.bootstrap.servers", "kafka:9092")
             .option("subscribe", topic)
             .option("startingOffsets", offset)
             .option("failOnDataLoss", "false")
@@ -232,47 +253,268 @@ class Spark_utils:
             self.log.error(f"Batch {batch_id}: Redis batch write error: {e}")
             raise
 
-    def weather_to_class(self, session, file_path, weather_df):
-        weather_df.createOrReplaceTempView("weather_df")
-        music_df = session.read.parquet(f"s3a://{self.bucket}/{file_path}")
-        music_df.createOrReplaceTempView("music_df")
 
-        # music_list의 경우 list형이기 때문에 이대로 csv나 parquet으로 저장하지 못함.
-        # json으로는 저장 가능
-        result_df = session.sql("""
-        with weather_convert AS(
-            SELECT *,
-            CASE WHEN month(obs_ts) BETWEEN 3 AND 5 THEN '봄'
-            WHEN month(obs_ts) BETWEEN 6 AND 8 THEN '여름'
-            WHEN month(obs_ts) BETWEEN 9 AND 11 THEN '가을'
-            ELSE '겨울'
-            END AS season,
-            CASE WHEN hour(obs_ts) BETWEEN 0 AND 6 THEN '새벽'
-            WHEN hour(obs_ts) BETWEEN 7 AND 11 THEN '오전'
-            WHEN hour(obs_ts) BETWEEN 12 AND 17 THEN '오후'
-            WHEN hour(obs_ts) BETWEEN 18 AND 24 THEN '밤'
-            END AS time_category,
-            CASE WHEN wc IN (70, 71, 72, 73, 74, 75, 76, 77, 78, 79) THEN '눈'
-            WHEN wc IN (50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99) THEN '비'
-            WHEN (season = '여름' AND ta >= 30 AND time_category IN ('오전', '오후')) OR (season = '여름' AND ta >= 25 AND time_category IN ('새벽', '밤')) THEN '더위'
-            WHEN sky = 5 THEN '흐림'
-            WHEN date_format(obs_ts, 'MM-dd') BETWEEN '02-25' AND '04-05'
-                    OR date_format(obs_ts, 'MM-dd') BETWEEN '08-25' AND '10-05'
-                THEN '환절기'
-            WHEN (time_category IN ('오전', '오후') AND ta BETWEEN 20 AND 26) OR (time_category = '밤' AND ta BETWEEN 18 AND 22) OR (time_category = '밤' AND ta BETWEEN 15 AND 20) THEN '선선'
-            ELSE '화창' END AS weather_category,
-            CONCAT(season, '-', time_category, '-', weather_category) AS weather_code
-            FROM weather_df
-        ),
-        weather_code_join AS(
-        SELECT a.stn_Id, collect_list((b.artists, b.album_name, b.track_name)) music_list
-        FROM weather_convert a
-        JOIN music_df b ON a.weather_code = b.weather_code
-        GROUP BY a.stn_id
+
+
+    # Forecast 
+    def preprocessing_weather_forecast(self, raw_data):
+        """
+            Preprocessing the weather forecast data format of
+                raw_json : struct
+                base_time : string
+                coord_id : string,
+                addresses : list(string)
+        """
+
+        # schema of raw_json
+        weather_item_schema = StructType([
+            StructField("baseDate", StringType(), True),
+            StructField("baseTime", StringType(), True),
+            StructField("category", StringType(), True),
+            StructField("fcstDate", StringType(), True),
+            StructField("fcstTime", StringType(), True),
+            StructField("fcstValue", StringType(), True),
+            StructField("nx", IntegerType(), True),
+            StructField("ny", IntegerType(), True),
+        ])
+        raw_json_schema = StructType([
+            StructField("response", StructType([
+                StructField("body", StructType([
+                    StructField("items", StructType([
+                        StructField("item", ArrayType(weather_item_schema), True)
+                    ]), True)
+                ]), True)
+            ]), True)
+        ])
+
+        # Schema
+        schema = StructType([
+            StructField('raw_json', raw_json_schema, True),
+            StructField('base_time', StringType(), True),
+            StructField('coord_id', StringType(), True),
+            StructField('addresses', ArrayType(StringType()), True)
+        ])
+
+        # JSON parse
+        df_parsed = (
+            raw_data
+            .selectExpr('CAST(value as String) as json', 'timestamp')
+            .select(from_json(col('json'), schema).alias('data'), col('timestamp'))
+            .select(
+                col('data.raw_json'),
+                col('data.base_time'),
+                col('data.coord_id'),
+                col('data.addresses'),
+                col('timestamp')
+            )
         )
-        SELECT a.*, b.music_list
-        FROM weather_convert a
-        JOIN weather_code_join b ON a.stn_id = b.stn_id
-        """)
 
-        return result_df
+        # Explode to create each column : address and raw_json
+        df_address = (
+            df_parsed
+            .withColumn('address', explode(col('addresses')))
+            .withColumn('item', explode(col("raw_json.response.body.items.item")))
+            .select(
+                col("address"),
+                col('base_time'),
+                col("item.fcstTime").alias("fcst_time"),
+                col("item.category").alias("category"),
+                col("item.fcstValue").alias("fcst_value"),
+                col("timestamp")
+            )
+        )
+
+        # Cast to each using columns to either double or integer
+        df_num = (
+            df_address
+            # 온도
+            .withColumn(
+                "T1H_val",
+                when(col("category") == "T1H", col("fcst_value").cast("double"))
+            )
+            # 1시간 강수량
+            .withColumn(
+                "RN1_val",
+                when(
+                    col("category") == "RN1",
+                    when(col("fcst_value") == "강수없음", "0").otherwise(col("fcst_value"))
+                ).cast("double")
+            )
+            # 하늘 상태
+            .withColumn(
+                "SKY_val",
+                when(col("category") == "SKY", col("fcst_value").cast("int"))
+            )
+            # 습도
+            .withColumn(
+                "REH_val",
+                when(col("category") == "REH", col("fcst_value").cast("double"))
+            )
+            # 강수 형태
+            .withColumn(
+                "PTY_val",
+                when(col("category") == "PTY", col("fcst_value").cast("int"))
+            )
+            # 풍속
+            .withColumn(
+                "WSD_val",
+                when(col("category") == "WSD", col("fcst_value").cast("double"))
+            )
+        )
+
+        # Aggregation
+        """ 
+            Group by address and its base time, compute 
+            To see whether is raining today, if yes then when and what type 
+            To see hows the cloud looks like To see Today's humidity 
+            To see Today's wind speed To see today's min, average, max average within time 
+            To see today's discomfort index To see today's apparent temperature 
+        """
+        result = (
+            df_num
+            .groupBy("address", "base_time")
+            .agg(
+                # Is raining
+                (max("PTY_val") > 0).alias("is_raining"),
+                min(
+                    when(col("PTY_val") > 0, col("fcst_time"))
+                ).alias("when_is_raining"),
+                avg("RN1_val").alias("precipitation"),
+
+                # humidity and wind speed (avg)
+                avg("REH_val").alias("humidity"),
+                avg("WSD_val").alias("wind_speed"),
+
+                # temperate(min, avg, max)
+                min("T1H_val").alias("temp_min"),
+                max("T1H_val").alias("temp_max"),
+                avg("T1H_val").alias("temp_avg"),
+
+                # SKY
+                collect_list(
+                    when(
+                        col("SKY_val").isNotNull(),
+                        struct(
+                            col("fcst_time"),
+                            col("SKY_val").alias("code"),
+                            when(col("SKY_val") == 1, "맑음")
+                            .when(col("SKY_val") == 2, "구름조금")
+                            .when(col("SKY_val") == 3, "구름많음")
+                            .when(col("SKY_val") == 4, "흐림")
+                            .alias("label")
+                        )
+                    )
+                ).alias("sky_details_raw"),
+
+                # precipitation
+                collect_list(
+                    when(
+                        col("PTY_val").isNotNull(),
+                        struct(
+                            col("fcst_time"),
+                            col("PTY_val").alias("code"),
+                            when(col("PTY_val") == 0, "없음")
+                            .when(col("PTY_val") == 1, "비")
+                            .when(col("PTY_val") == 2, "비/눈")
+                            .when(col("PTY_val") == 3, "눈")
+                            .when(col("PTY_val") == 5, "빗방울")
+                            .when(col("PTY_val") == 6, "빗방울눈날림")
+                            .when(col("PTY_val") == 7, "눈날림")
+                            .alias("label")
+                        )
+                    )
+                ).alias("precipitation_details_raw")
+            )
+        )
+
+        # Remove null struct
+        result = (
+            result
+            .withColumn(
+                "sky_details",
+                expr("filter(sky_details_raw, x -> x is not null)")
+            )
+            .withColumn(
+                "precipitation_details",
+                expr("filter(precipitation_details_raw, x -> x is not null)")
+            )
+            .drop("sky_details_raw", "precipitation_details_raw")
+        )
+
+        # Discomfort index and apapparent temperature
+        result = result.withColumn(
+            "discomfort_index",
+            0.81 * col("temp_avg")
+            + 0.01 * col("humidity") * (0.99 * col("temp_avg") - 14.3)
+            + 46.3
+        )
+        result = result.withColumn(
+            "apparent_temp",
+            13.12 \
+            + 0.6215 * col("temp_avg") \
+            - 11.37 * (col("wind_speed")**0.16) \
+            + 0.3965 * col("temp_avg") * (col("wind_speed")**0.16)
+        )
+
+        return result
+    
+
+    def save_batch_to_redis_forecast(self, batch_df, batch_id):
+        try:
+            rows = batch_df.collect()
+
+            if not rows:
+                self.log.info(f'Batch {batch_id}: No data to write to Redis')
+                return
+            
+            r = redis.Redis(
+                host=self.redis_host,
+                port=self.redis_port,
+                decode_responses=True
+            )
+            for row in rows:
+                try:
+                    # Store in Redis as key : forecast:address
+                    key = f"forecast:{row['address']}"
+                    value = json.dumps(row.asDict(), ensure_ascii=False)
+                    r.set(key, value)
+                    
+                    # TTL 24 hours
+                    r.expire(key, 86400)
+                    
+                    self.log.info(f"Batch {batch_id}: Saved to Redis - {key}")
+                    
+                except Exception as row_error:
+                    self.log.error(f"Batch {batch_id}: Error saving row to Redis: {row_error}")
+                    continue
+            
+            self.log.info(f"Batch {batch_id}: Successfully saved {len(rows)} records to Redis")
+            
+        except Exception as e:
+            self.log.error(f"Batch {batch_id}: Redis batch write error: {e}")
+            raise
+
+    def save_batch_to_s3_forecast(self, batch_df, batch_id):
+        """
+            Save spark dataframe as parquet in s3 folder
+        """
+        try:
+            s3_path = f"s3a://{self.bucket}/weather-forecast/hourly-data"
+            
+            self.log.info(f"Batch {batch_id}: Writing records to S3...")
+            
+            (
+                batch_df
+                .write
+                .mode("overwrite")
+                .partitionBy("base_time")
+                .parquet(s3_path)
+                .option("compression", "snappy")
+                .option("maxRecordsPerFile", 20000)
+            )
+            
+            self.log.info(f"Batch {batch_id}: Successfully saved records to S3 - {s3_path}")
+            
+        except Exception as e:
+            self.log.error(f"Batch {batch_id}: S3 write error: {e}")
+            raise
