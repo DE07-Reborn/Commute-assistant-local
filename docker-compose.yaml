@@ -136,7 +136,7 @@ services:
       /opt/spark/bin/spark-class
       org.apache.spark.deploy.master.Master 
     ports:
-      - "7077:7077"
+      - "7078:7077"
       - "8081:8080"
     environment:
       PYTHONPATH: /opt/project/src

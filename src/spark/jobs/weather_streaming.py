@@ -1,14 +1,15 @@
 from spark.utils.spark_utils import Spark_utils
 from spark.utils.book_recommender import BookRecommender
+from pyspark.sql.functions import broadcast
+
 import logging
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("weather-forecast-streaming")
 
-def run_weather_stream(spark_utils, spark):
+def run_weather_stream(spark_utils, spark, music_df):
     """
-        The topic is received data every 10 minutes about 6hours 
-        weather forecast
+        The topic is received data every Hourly(00:05) 
     """
 
     log.info("Initializing weather stream...")
@@ -19,7 +20,12 @@ def run_weather_stream(spark_utils, spark):
     # Preprocess
     df_weather = spark_utils.preprocessing_kma_weather(raw_weather)
 
-    # Recommend eBook
+    df_weather = df_weather.join(
+        broadcast(music_df),
+        on='weather_code',
+        how='left'
+    )
+
     br = BookRecommender(
         spark=spark,
         bucket=spark_utils.bucket
@@ -54,13 +60,13 @@ def run_weather_stream(spark_utils, spark):
 
 def run_forecast_stream(spark_utils, spark):
     """
-        Hourly(00:05) planned live climate data
+        30 minutes interval for 6hours of weather forecast
     """
 
     log.info("Initializing forecast stream...")
 
     # Read Kafka
-    raw_forecast = spark_utils.read_kafka_topic(spark, '10min_forecast_raw')
+    raw_forecast = spark_utils.read_kafka_topic(spark, '30min_forecast_raw')
 
     # Preprocess
     df_forecast = spark_utils.preprocessing_weather_forecast(raw_forecast)
@@ -95,8 +101,11 @@ def main():
 
     log.info("Starting weather + forecast streams...")
 
+    # read music df
+    music_df = spark_utils.get_music_data(spark)
+
     # Start both streaming pipelines
-    weather_queries = run_weather_stream(spark_utils, spark)
+    weather_queries = run_weather_stream(spark_utils, spark, music_df)
     forecast_queries = run_forecast_stream(spark_utils, spark)
 
     # Wait for termination from any stream

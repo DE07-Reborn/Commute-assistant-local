@@ -367,5 +367,6 @@ class BookRecommender:
             "obs_time", "obs_ts", "obs_yyyymmddhh", "stn_id",
             "ws", "ta", "hm", "rn", "sd_tot", "wc", "pop", "sky",
             "title", "author", "categoryName",
-            "description", "ebook_isbn13", "ebook_link"
+            "description", "ebook_isbn13", "ebook_link",
+            'music_json'
         )

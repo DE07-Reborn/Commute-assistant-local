@@ -3,9 +3,11 @@ from pyspark.sql.functions import (
     col, split, from_json, regexp_replace, 
     when, lit, to_timestamp, date_format, 
     explode, min, max, avg, struct,
-    collect_list, expr
+    collect_list, expr, row_number,
+    substring, concat_ws, coalesce, to_json,
+    
 )
-
+from pyspark.sql.window import Window
 import json
 import redis
 import logging
@@ -167,16 +169,86 @@ class Spark_utils:
             ) # 하늘상태 (1-맑음; 2-구름조금; 3-부분적흐림; 4-대체로흐림; 5-흐림)
         )
 
+        # determine season | time-category | weather-category | weather-code
+        df = df_parsed \
+            .withColumn("month", substring("obs_time", 5, 2).cast("int")) \
+            .withColumn("day", substring("obs_time", 7, 2).cast("int")) \
+            .withColumn("hour", substring("obs_time", 9, 2).cast("int"))
+
+        df = df.withColumn(
+            "season",
+            when(col("month").between(3, 5), "봄")
+            .when(col("month").between(6, 8), "여름")
+            .when(col("month").between(9, 11), "가을")
+            .otherwise("겨울")
+        )
+
+        df = df.withColumn(
+            "time_category",
+            when(col("hour").between(0, 6), "새벽")
+            .when(col("hour").between(7, 11), "오전")
+            .when(col("hour").between(12, 17), "오후")
+            .otherwise("밤")
+        )
+        df = df \
+            .withColumn("wc", coalesce(col("wc"), lit(-99))) \
+            .withColumn("ta", coalesce(col("ta"), lit(0.0))) \
+            .withColumn("sky", coalesce(col("sky"), lit(0)))
+
+        df = df.withColumn(
+            "weather_category",
+            when(col("wc").between(70, 79), "눈")
+            .when(col("wc").between(50, 99), "비")
+            .when(
+                (col("season") == "여름") &
+                (
+                    ((col("ta") >= 30) & col("time_category").isin("오전", "오후")) |
+                    ((col("ta") >= 25) & col("time_category").isin("새벽", "밤"))
+                ),
+                "더위"
+            )
+            .when(col("sky") == 5, "흐림")
+            .when(
+                (
+                    (col("month") == 2) & (col("day") >= 25)
+                ) |
+                (col("month").between(3, 4)) |
+                (
+                    (col("month") == 10) & (col("day") <= 5)
+                ),
+                "환절기"
+            )
+            .when(
+                (
+                    col("time_category").isin("오전", "오후") &
+                    col("ta").between(20, 26)
+                ) |
+                (
+                    (col("time_category") == "밤") &
+                    col("ta").between(18, 22)
+                ) |
+                (
+                    (col("time_category") == "새벽") &
+                    col("ta").between(15, 20)
+                ),
+                "선선"
+            )
+            .otherwise("화창")
+        )
+
+
         # Fix final DataFrame
         return (
-            df_parsed
+            df
             .withColumn("obs_ts", to_timestamp(col("obs_time"), "yyyyMMddHHmm"))
             .withColumn("obs_yyyymmddhh", date_format(col("obs_ts"), "yyyyMMddHH"))
+            .withColumn('weather_code', concat_ws("-", "season", "time_category", "weather_category"))
             .select(
                 "obs_time", "obs_ts", "obs_yyyymmddhh",
                 "stn_id",
                 "ws", "ta", "hm", "rn", "sd_tot",
-                "wc", "pop", "sky"
+                "wc", "pop", "sky", 
+                'weather_code'
             )
         )
 
@@ -229,6 +301,8 @@ class Spark_utils:
                         'wc': str(row['wc']) if row['wc'] is not None else '',
                         'pop': str(row['pop']) if row['pop'] is not None else '',
                         'sky': str(row['sky']) if row['sky'] is not None else '',
+                        # 음악 추천 결과
+                        'music' : row['music_json'],
                         # 도서 추천 결과
                         "book_title": row["title"] or "",
                         "book_author": row["author"] or "",
@@ -236,6 +310,7 @@ class Spark_utils:
                         "book_description": row["description"] or "",
                         "book_isbn13": row["ebook_isbn13"] or "",
                         "book_link": row["ebook_link"] or "",
+                        
                     }
                     
                     # Store in Redis as key : kma-stn:stn_id
@@ -385,9 +460,9 @@ class Spark_utils:
                 ).alias("when_is_raining"),
                 avg("RN1_val").alias("precipitation"),
 
-                # humidity and wind speed (avg)
+                # humidity (avg) and wind speed (max)
                 avg("REH_val").alias("humidity"),
-                avg("WSD_val").alias("wind_speed"),
+                max("WSD_val").alias("wind_speed"),
 
                 # temperate(min, avg, max)
                 min("T1H_val").alias("temp_min"),
@@ -460,6 +535,26 @@ class Spark_utils:
             + 0.3965 * col("temp_avg") * (col("wind_speed")**0.16)
         )
 
+        result = result.withColumn(
+            "clothes",
+            when(col('apparent_temp') <= -5, "롱패딩 또는 두꺼운 패딩")
+            .when(col("apparent_temp") <= 3,  "패딩 또는 두꺼운 코트")
+            .when(col("apparent_temp") <= 8,  "코트 또는 니트")
+            .when(col("apparent_temp") <= 13, "니트 또는 후드티")
+            .when(col("apparent_temp") <= 18, "가디건 또는 얇은 후드티")
+            .when(col("apparent_temp") <= 23, "긴팔 티셔츠 또는 셔츠")
+            .otherwise("반팔 티셔츠")
+        )
+
+        result = result.withColumn(
+            'guide',
+            when(col('discomfort_index') >= 80, "매우 덥고 습함 → 통풍 좋은 옷 추천")
+            .when(col('discomfort_index') >= 75, "다소 불쾌 → 한 단계 얇게 입는 것이 좋음")
+            .when(col('discomfort_index') >= 68, "약간 불쾌 → 통기성 고려")
+            .otherwise("쾌적 → 레이어드 가능")
+
+        )
+
         return result
     
 
@@ -503,6 +598,10 @@ class Spark_utils:
             Save spark dataframe as parquet in s3 folder
         """
         try:
+            if batch_df is None or batch_df.rdd.isEmpty():
+                self.log.info(f"Batch {batch_id}: Empty batch, skip S3 write")
+                return
+            
             s3_path = f"s3a://{self.bucket}/weather-forecast/hourly-data"
             
             self.log.info(f"Batch {batch_id}: Writing records to S3...")
@@ -511,10 +610,11 @@ class Spark_utils:
                 batch_df
                 .write
                 .mode("overwrite")
-                .partitionBy("base_time")
-                .parquet(s3_path)
                 .option("compression", "snappy")
                 .option("maxRecordsPerFile", 20000)
+                .partitionBy("base_time")
+                .parquet(s3_path)
+
             )
             
             self.log.info(f"Batch {batch_id}: Successfully saved records to S3 - {s3_path}")
@@ -523,3 +623,39 @@ class Spark_utils:
             self.log.error(f"Batch {batch_id}: S3 write error: {e}")
             raise
 
+
+
+
+    # Music metadata partition by weather code to get 10 random samples
+    def get_music_data(self, spark):
+        music_df = spark.read.parquet(
+            f"s3a://{self.bucket}/music/music_classified.parquet"
+        ).select("weather_code", "artists", "album_name", "track_name", "popularity")
+        
+
+        w = Window.partitionBy('weather_code').orderBy(col('popularity').desc())
+
+        df = (
+            music_df
+            .withColumn('rn', row_number().over(w))
+            .filter('rn <= 10')
+            .groupBy('weather_code')
+            .agg(
+                collect_list(
+                    struct(
+                        "artists",
+                        "album_name",
+                        "track_name"
+                    )
+                ).alias("music_items")
+            )
+            .cache()
+        )
+        df.count()
+
+        df = df.withColumn(
+            "music_json",
+            to_json("music_items")
+        ).drop("music_items")
+
+        return df

@@ -50,12 +50,10 @@ def request_and_send_api(**context):
         }
 
         kafka_producer.send_to_kafka(
-            '10min_forecast_raw', key, message
+            '30min_forecast_raw', key, message
         )
 
         sent_count += 1
-
-        
 
     kafka_producer.close_kafka()
     logging.info(f'Sent {sent_count} weather records to kafka')
@@ -65,17 +63,17 @@ def request_and_send_api(**context):
 
 
 # DAG Init
-# This DAG runs every 10 minutes
+# This DAG runs every 30 minutes
 KST = pendulum.timezone("Asia/Seoul")
 with DAG(
-    dag_id = 'send_10min_forecast_to_kafka',
+    dag_id = 'send_30min_forecast_to_kafka',
     start_date=pendulum.datetime(2025, 1, 1, 0, 0, tz=KST),
-    schedule_interval="0/10 * * * *",
+    schedule_interval="*/30 * * * *",
     catchup = False,
     max_active_runs=1,
-    tags=["10minutes", "Forecast", "kafka"],
+    tags=["30minutes", "Forecast", "kafka"],
     default_args={
-        'retries' : 2,
+        'retries' : 3,
         'retry_delay' : timedelta(seconds=30)
     },
 ) as dag:
