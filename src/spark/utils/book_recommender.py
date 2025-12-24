@@ -103,7 +103,7 @@ class BookRecommender:
             return
 
         from pyspark.sql.window import Window
-        from pyspark.sql.functions import row_number, explode, array
+        from pyspark.sql.functions import row_number, explode
 
         books = self.spark.read.parquet(self.booklist_path)
         ebooks = books.filter(col("has_ebook"))
