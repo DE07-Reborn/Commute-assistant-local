@@ -2,7 +2,6 @@ import os
 import boto3
 import logging
 import io
-import pandas as pd
 
 
 class S3_utils:
@@ -71,13 +70,3 @@ class S3_utils:
             Key=key,
             Body=buffer.getvalue()
         )
-
-    # Read Address-coord meta data
-    def read_address(self):
-        obj = self.s3.get_object(
-            Bucket=self.bucket,
-            Key="address-coord/coordinate_meta.csv"
-        )
-        body = obj["Body"].read().decode("utf-8")
-        df = pd.read_csv(io.StringIO(body))
-        return df

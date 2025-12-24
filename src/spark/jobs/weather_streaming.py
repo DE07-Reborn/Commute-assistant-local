@@ -95,11 +95,43 @@ def run_forecast_stream(spark_utils, spark):
     return [redis_query, s3_query]
 
 
+def run_air_realtime_stream(spark_utils, spark):
+
+    log.info("Initializing air-realtime stream...")
+
+    air_realtime_raw = spark_utils.read_kafka_topic(spark, "air-quality-realtime")
+    air_realtime_df = spark_utils.preprocessing_air_quality(air_realtime_raw)
+
+    air_redis_checkpoint = f"s3a://{spark_utils.bucket}/air-quality/_checkpoint_redis"
+    air_redis_query = (
+        air_realtime_df
+        .repartition(1)
+        .writeStream
+        .foreachBatch(spark_utils.save_batch_to_redis_air)
+        .outputMode("append")
+        .option("checkpointLocation", air_redis_checkpoint)
+        .start()
+    )
+
+    air_s3_checkpoint = f"s3a://{spark_utils.bucket}/air-quality/_checkpoint_s3"
+    air_s3_query = (
+        air_realtime_df
+        .writeStream
+        .foreachBatch(spark_utils.save_batch_to_s3_air)
+        .outputMode("append")
+        .option("checkpointLocation", air_s3_checkpoint)
+        .start()
+    )
+
+    log.info("Air-realtime streaming started.")
+    return [air_redis_query, air_s3_query]
+
+
 def main():
     spark_utils = Spark_utils()
     spark = spark_utils.get_spark("weather_streaming_app")
 
-    log.info("Starting weather + forecast streams...")
+    log.info("Starting weather + forecast + air-realtime streams...")
 
     # read music df
     music_df = spark_utils.get_music_data(spark)
@@ -107,9 +139,10 @@ def main():
     # Start both streaming pipelines
     weather_queries = run_weather_stream(spark_utils, spark, music_df)
     forecast_queries = run_forecast_stream(spark_utils, spark)
+    air_realtime_queries = run_air_realtime_stream(spark_utils, spark)
 
     # Wait for termination from any stream
-    all_queries = weather_queries + forecast_queries
+    all_queries = weather_queries + forecast_queries + air_realtime_queries
 
     for q in all_queries:
         q.awaitTermination()

@@ -12,12 +12,17 @@ S3_PATH = "raw_data/music"
 S3_MUSIC_DATA = "music_origin_data"
 S3_MUSIC_RESULT_DATA = "music_classified"
 S3_WEATHER_CODE_DATA = "weather_code_table"
+S3_GENRE_FILTER_DATA = "genre_filter_list"
 
-def bring_data_from_s3(bucket_path, music_data, weather_code_data, **context):
+def bring_data_from_s3(bucket_path, music_data, genre_filter_data, weather_code_data, **context):
     try:
         s3 = Basic_s3_utils()
         music_data_path = bucket_path + '/' + music_data
         music_df = s3.read(path=music_data_path)
+
+        genre_data_path = bucket_path + '/' + genre_filter_data
+        genre_filter_df = s3.read(path=genre_data_path)
+        music_df = music_df[music_df['track_genre'].isin(genre_filter_df['genre_filter_list'])]
 
         weather_code_data_path = bucket_path + '/' + weather_code_data
         weather_code_df = s3.read(path=weather_code_data_path, input_type='csv')
@@ -100,7 +105,8 @@ with DAG(
         op_kwargs={
             "bucket_path": S3_PATH,
             "music_data": S3_MUSIC_DATA,
-            "weather_code_data": S3_WEATHER_CODE_DATA
+            "weather_code_data": S3_WEATHER_CODE_DATA,
+            "genre_filter_data": S3_GENRE_FILTER_DATA
         }
     )
 
