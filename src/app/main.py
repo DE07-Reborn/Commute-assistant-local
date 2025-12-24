@@ -145,3 +145,34 @@ def get_forecast(home_address, work_address):
         'work_address' : address_2.split(':')[1],
         'value_2' : data_2,
     }
+
+
+
+@app.get("/air")
+def get_air(home_address, work_address):
+    """
+        Request Redis to send air pollute (fine dust) information within 30 minutes updates
+        param
+            home_address : User's home address
+            work_address : User's work address
+    """
+    address_1 = f"forecast:{' '.join(home_address.split()[:2])}"
+    address_2 = f"forecast:{' '.join(work_address.split()[:2])}"
+
+    data_1 = redis_client.get(address_1)
+    data_2 = redis_client.get(address_2)
+
+    data_1 = json.loads(data_1)
+    data_2 = json.loads(data_2)
+
+    if data_1 is None:
+        raise HTTPException(status_code=404, detail=f'No data for station {address_1}')
+    if data_2 is None:
+        raise HTTPException(status_code=404, detail=f'No data for station {address_2}')
+
+    return {
+        'home_address' : address_1.split(':')[1],
+        'value_1' : data_1,
+        'work_address' : address_2.split(':')[1],
+        'value_2' : data_2,
+    }

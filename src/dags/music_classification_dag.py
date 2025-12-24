@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
 from io import StringIO
 import pandas as pd
+import os
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from utils.basic_s3_utils import Basic_s3_utils
 
-S3_BUCKET = "commute-test-bucket"
+S3_BUCKET = os.getenv('AWS_S3_BUCKET')
 S3_PATH = "raw_data/music"
 S3_MUSIC_DATA = "music_origin_data"
 S3_MUSIC_RESULT_DATA = "music_classified"
