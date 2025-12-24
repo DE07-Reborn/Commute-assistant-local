@@ -1,4 +1,5 @@
 from spark.utils.spark_utils import Spark_utils
+from spark.utils.book_recommender import BookRecommender
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -18,11 +19,19 @@ def run_weather_stream(spark_utils, spark):
     # Preprocess
     df_weather = spark_utils.preprocessing_kma_weather(raw_weather)
 
+    # Recommend eBook
+    br = BookRecommender(
+        spark=spark,
+        bucket=spark_utils.bucket
+    )
+    df_with_recommendation = br.add_recommendation(df_weather)
+
     # Redis Sink
-    df_weather_redis = df_weather.repartition(1)
     redis_checkpoint = f"s3a://{spark_utils.bucket}/kma-weather/_checkpoint_redis"
     redis_query = (
-        df_weather_redis.writeStream
+        df_with_recommendation
+        .repartition(1)
+        .writeStream
         .foreachBatch(spark_utils.save_batch_to_redis)
         .outputMode("append")
         .option("checkpointLocation", redis_checkpoint)
@@ -32,7 +41,7 @@ def run_weather_stream(spark_utils, spark):
     # S3 Sink
     s3_checkpoint = f"s3a://{spark_utils.bucket}/kma-weather/_checkpoint_s3"
     s3_query = (
-        df_weather.writeStream
+        df_with_recommendation.writeStream
         .foreachBatch(spark_utils.save_batch_to_s3)
         .outputMode("append")
         .option("checkpointLocation", s3_checkpoint)

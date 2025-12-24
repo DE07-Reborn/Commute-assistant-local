@@ -229,7 +229,13 @@ class Spark_utils:
                         'wc': str(row['wc']) if row['wc'] is not None else '',
                         'pop': str(row['pop']) if row['pop'] is not None else '',
                         'sky': str(row['sky']) if row['sky'] is not None else '',
-                        # 도서 및 음악 추천 결과 저장
+                        # 도서 추천 결과
+                        "book_title": row["title"] or "",
+                        "book_author": row["author"] or "",
+                        "book_genre": row["categoryName"] or "",
+                        "book_description": row["description"] or "",
+                        "book_isbn13": row["ebook_isbn13"] or "",
+                        "book_link": row["ebook_link"] or "",
                     }
                     
                     # Store in Redis as key : kma-stn:stn_id
