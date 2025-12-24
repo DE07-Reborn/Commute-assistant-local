@@ -7,7 +7,7 @@ from pyspark.sql.functions import (
 import redis
 import logging
 
-from pyspark.sql.types import StructType, StructField, StringType
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 import os
 
 class Spark_utils:
@@ -155,6 +155,54 @@ class Spark_utils:
             )
         )
 
+    def preprocessing_air_quality(self, raw_data):
+        schema = StructType([
+            StructField("sido_name", StringType()),
+            StructField("station_name", StringType()),
+            StructField("pm25", IntegerType()),
+            StructField("pm10", IntegerType()),
+            StructField("pm25_flag", StringType()),
+            StructField("pm10_flag", StringType()),
+            StructField("data_time", StringType()),
+            StructField("storage_time", StringType()),
+        ])
+
+        df = (
+            raw_data
+            .selectExpr("CAST(value AS STRING) as json_str")
+            .select(from_json(col("json_str"), schema).alias("d"))
+            .select("d.*")
+            .withColumn(
+                "obs_ts",
+                to_timestamp(col("data_time"), "yyyy-MM-dd HH:mm")
+            )
+            .withColumn("obs_yyyymmddhh", date_format(col("obs_ts"), "yyyyMMddHH"))
+            # 미세먼지 등급
+            .withColumn(
+                "pm10_level",
+                when(col("pm10") <= 30, "좋음")
+                .when(col("pm10") <= 80, "보통")
+                .when(col("pm10") <= 150, "나쁨")
+                .otherwise("매우나쁨")
+            )
+            .withColumn(
+                "pm25_level",
+                when(col("pm25") <= 15, "좋음")
+                .when(col("pm25") <= 35, "보통")
+                .when(col("pm25") <= 75, "나쁨")
+                .otherwise("매우나쁨")
+            )
+            # 마스크 추천
+            .withColumn(
+                "mask_required",
+                when(
+                    (col("pm10") > 80) | (col("pm25") > 35),
+                    lit("Y")
+                ).otherwise(lit("N"))
+            )
+        )
+
+        return df
 
     def save_batch_to_s3(self, batch_df, batch_id):
         """
@@ -180,6 +228,29 @@ class Spark_utils:
             self.log.error(f"Batch {batch_id}: S3 write error: {e}")
             raise
 
+    def save_batch_to_s3_air(self, batch_df, batch_id):
+        """
+            Save spark dataframe as parquet in s3 folder
+        """
+        try:
+            count = batch_df.count()
+            s3_path = f"s3a://{self.bucket}/air-quality/hourly-data"
+            
+            self.log.info(f"Batch {batch_id}: Writing {count} records to S3...")
+            
+            (
+                batch_df
+                .write
+                .mode("append")
+                .partitionBy("obs_yyyymmddhh")
+                .parquet(s3_path)
+            )
+            
+            self.log.info(f"Batch {batch_id}: Successfully saved {count} records to S3 - {s3_path}")
+            
+        except Exception as e:
+            self.log.error(f"Batch {batch_id}: S3 write error: {e}")
+            raise
 
     def save_batch_to_redis(self, batch_df, batch_id):
         try:
@@ -225,6 +296,55 @@ class Spark_utils:
         except Exception as e:
             self.log.error(f"Batch {batch_id}: Redis batch write error: {e}")
             raise
+
+    def save_batch_to_redis_air(self, batch_df, batch_id):
+        try:
+            rows = batch_df.collect()
+
+            if not rows:
+                self.log.info(f"Batch {batch_id}: No air-quality data to write to Redis")
+                return
+
+            r = redis.Redis(
+                host=self.redis_host,
+                port=self.redis_port,
+                decode_responses=True
+            )
+
+            for row in rows:
+                try:
+                    key = f"air:{row['sido_name']}:{row['station_name']}"
+
+                    air_data = {
+                        "sido_name": row["sido_name"] or "",
+                        "station_name": row["station_name"] or "",
+                        "pm10": str(row["pm10"]) if row["pm10"] is not None else "",
+                        "pm25": str(row["pm25"]) if row["pm25"] is not None else "",
+                        "pm10_level": row["pm10_level"] or "",
+                        "pm25_level": row["pm25_level"] or "",
+                        "mask_required": row["mask_required"] or "",
+                        "data_time": row["data_time"] or "",
+                    }
+
+                    r.hset(key, mapping=air_data)
+                    r.expire(key, 86400)
+
+                    self.log.info(f"Batch {batch_id}: Saved air-quality to Redis - {key}")
+
+                except Exception as row_error:
+                    self.log.error(
+                        f"Batch {batch_id}: Error saving air-quality row to Redis: {row_error}"
+                    )
+                    continue
+
+            self.log.info(
+                f"Batch {batch_id}: Successfully saved {len(rows)} air-quality records to Redis"
+            )
+
+        except Exception as e:
+            self.log.error(f"Batch {batch_id}: Redis air-quality batch write error: {e}")
+            raise
+
 
     def weather_to_class(self, session, file_path, weather_df):
         weather_df.createOrReplaceTempView("weather_df")

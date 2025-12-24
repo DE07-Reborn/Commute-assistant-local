@@ -14,6 +14,10 @@ def main():
     # Preprocessing the data to data frame
     df = spark_utils.preprocessing_kma_weather(raw_data)
 
+    air_realtime_raw = spark_utils.read_kafka_topic(
+        spark, "air-quality-realtime"
+    )
+    air_realtime_df = spark_utils.preprocessing_air_quality(air_realtime_raw)
 
     # 음악 / 도서 추천 알고리즘
     ## 여기 추가 예정
@@ -38,6 +42,16 @@ def main():
         .option("checkpointLocation", redis_checkpoint)
         .start()
     )
+    air_redis_checkpoint = f"s3a://{spark_utils.bucket}/air-quality/_checkpoint_redis"
+    (
+        air_realtime_df
+        .repartition(1)
+        .writeStream
+        .foreachBatch(spark_utils.save_batch_to_redis_air)
+        .outputMode("append")
+        .option("checkpointLocation", air_redis_checkpoint)
+        .start()
+    )
 
     # save to S3
     s3_checkpoint = f"s3a://{spark_utils.bucket}/kma-weather/_checkpoint_s3"
@@ -50,6 +64,15 @@ def main():
     )
     log.info("------------S3 stream started-------------")
 
+    air_s3_checkpoint = f"s3a://{spark_utils.bucket}/air-quality/_checkpoint_s3"
+    (
+        air_realtime_df
+        .writeStream
+        .foreachBatch(spark_utils.save_batch_to_s3_air)
+        .outputMode("append")
+        .option("checkpointLocation", air_s3_checkpoint)
+        .start()
+    )
 
     log.info("Weather streaming started. Waiting termination...")
     spark.streams.awaitAnyTermination()
