@@ -5,6 +5,9 @@
 3. 환경 + latent score -> 대표 장르 결정 (config-driven)
 4. 대표 장르 -> 세부 장르 선택
 5. S3에서 해당 세부 장르의 eBook 정보 가져오기
+   - (Tier1) rec_genre 매칭
+   - (Tier2) rep_genre 범위(서브장르 묶음)에서 1권 fallback
+   - (Tier3) global default 1권 fallback (무조건 존재해야 함)
 """
 
 from __future__ import annotations
@@ -79,37 +82,101 @@ GENRE_SCORE_CONFIG = {
 
 # Book Recommender
 class BookRecommender:
-    
+
     def __init__(self, spark: SparkSession, bucket: str):
         self.spark = spark
         self.bucket = bucket
         self.booklist_path = f"s3a://{bucket}/BookList/*/*.parquet"
-        self._top_ebook_df = None
-    
-    # S3에 저장된 장르별 TOP eBook 로딩
+
+        # Tier cache
+        self._tier1_top_by_genre_df = None   # (genre -> top1)
+        self._tier2_top_by_rep_df = None     # (rep_genre -> top1 among its subgenres)
+        self._tier3_global_top_df = None     # (single row) global default top1
+
+    # S3에 저장된 장르별 TOP eBook 로딩 (+ fallback tier 구축)
     def _load_top_ebook_df(self):
-        if self._top_ebook_df is not None:
+        if (
+            self._tier1_top_by_genre_df is not None
+            and self._tier2_top_by_rep_df is not None
+            and self._tier3_global_top_df is not None
+        ):
             return
-        
+
         from pyspark.sql.window import Window
-        from pyspark.sql.functions import row_number
-        
+        from pyspark.sql.functions import row_number, explode, array
+
         books = self.spark.read.parquet(self.booklist_path)
-        
         ebooks = books.filter(col("has_ebook"))
-        
-        w = Window.partitionBy("genre").orderBy(col("bestRank").cast("int").asc())
-        
-        self._top_ebook_df = (
+
+        # Tier1: genre(=sub genre)별 top1
+        w1 = Window.partitionBy("genre").orderBy(col("bestRank").cast("int").asc())
+
+        tier1 = (
             ebooks
-            .withColumn("rn", row_number().over(w))
+            .withColumn("rn", row_number().over(w1))
             .filter(col("rn") == 1)
-            .select("genre", "title", "author", "categoryName", "description", "ebook_isbn13", "ebook_link")
+            .select(
+                col("genre").alias("tier1_genre"),
+                col("title").alias("tier1_title"),
+                col("author").alias("tier1_author"),
+                col("categoryName").alias("tier1_categoryName"),
+                col("description").alias("tier1_description"),
+                col("ebook_isbn13").alias("tier1_ebook_isbn13"),
+                col("ebook_link").alias("tier1_ebook_link"),
+            )
         )
-    
+
+        # Tier3: global top1 (전역 fallback, 반드시 존재해야 함)
+        w3 = Window.orderBy(col("bestRank").cast("int").asc())
+
+        tier3 = (
+            ebooks
+            .withColumn("rn", row_number().over(w3))
+            .filter(col("rn") == 1)
+            .select(
+                col("title").alias("tier3_title"),
+                col("author").alias("tier3_author"),
+                col("categoryName").alias("tier3_categoryName"),
+                col("description").alias("tier3_description"),
+                col("ebook_isbn13").alias("tier3_ebook_isbn13"),
+                col("ebook_link").alias("tier3_ebook_link"),
+            )
+        )
+
+        # Tier2: rep_genre별 top1 (rep_genre의 subgenre 묶음에서 bestRank top1)
+        rep_rows = []
+        for rep, subs in REP_GENRE_MAP.items():
+            rep_rows.append((rep, subs))
+
+        rep_schema_df = self.spark.createDataFrame(rep_rows, ["rep_genre", "sub_list"])
+        rep_exploded = rep_schema_df.select(col("rep_genre"), explode(col("sub_list")).alias("sub_genre"))
+
+        # rep_genre + (매칭된 ebooks) 중 bestRank top1
+        w2 = Window.partitionBy("rep_genre").orderBy(col("bestRank").cast("int").asc())
+
+        tier2 = (
+            rep_exploded
+            .join(ebooks, rep_exploded["sub_genre"] == ebooks["genre"], "inner")
+            .withColumn("rn", row_number().over(w2))
+            .filter(col("rn") == 1)
+            .select(
+                col("rep_genre").alias("tier2_rep_genre"),
+                col("title").alias("tier2_title"),
+                col("author").alias("tier2_author"),
+                col("categoryName").alias("tier2_categoryName"),
+                col("description").alias("tier2_description"),
+                col("ebook_isbn13").alias("tier2_ebook_isbn13"),
+                col("ebook_link").alias("tier2_ebook_link"),
+            )
+        )
+
+        self._tier1_top_by_genre_df = tier1
+        self._tier2_top_by_rep_df = tier2
+        self._tier3_global_top_df = tier3
+
     # 메인 추천 로직
     def add_recommendation(self, df: DataFrame):
-        
+
         # 환경 Context - 계절/시간대
         df = (
             df
@@ -131,8 +198,8 @@ class BookRecommender:
             )
             .drop("month", "hour")
         )
-        
-        # 환경 Context  - 날씨
+
+        # 환경 Context - 날씨
         ta = coalesce(col("ta"), lit(15.0))
         hm = coalesce(col("hm"), lit(60.0))
         rn = coalesce(col("rn"), lit(0.0))
@@ -146,7 +213,7 @@ class BookRecommender:
             ((col("daypart") == "night") & ta.between(15, 20))
         )
         hot = (ta >= 30) | ((col("daypart") == "night") & (ta >= 25))
-        
+
         df = (df
             .withColumn("is_rainy", (rn > 0) | (col("pop") >= 60))
             .withColumn("is_snowy", col("sd_tot") > 0)
@@ -158,7 +225,7 @@ class BookRecommender:
             .withColumn("is_clear", sky.isin(1, 2))
             .withColumn("is_cloudy", sky >= 4)
         )
-        
+
         # Latent State 계산
         df = (df
             .withColumn(        # Valence : 정서적 긍부정도
@@ -195,49 +262,44 @@ class BookRecommender:
                 .otherwise(0.2)
             )
         )
-        
+
         # 장르 점수 계산
-        
         score_cols = []
         for genre, conf in GENRE_SCORE_CONFIG.items():
             exprs = []
-            
+
             for k, w in conf.get("context", {}).items():
                 if ":" in k:
                     c, v = k.split(":")
                     exprs.append(w * (col(c) == v).cast("double"))
                 else:
                     exprs.append(w * col(k).cast("double"))
-            
+
             for k, w in conf.get("latent", {}).items():
                 if k.endswith("_inv"):
                     exprs.append(w * (1 - col(k.replace("_inv", ""))))
                 else:
                     exprs.append(w * col(k))
-            
-            # 최종 장르별 점수
+
             score_col = f"score_{genre.lower()}"
             df = df.withColumn(score_col, reduce(lambda a, b: a + b, exprs))
             score_cols.append((genre, score_col))
-        
+
         # 최고 점수의 장르 선택
-        
         rep_expr = None
         for genre, score in score_cols:
             condition = col(score) == greatest(*[col(c) for _, c in score_cols])
             rep_expr = when(condition, genre) if rep_expr is None else rep_expr.when(condition, genre)
-        
+
         df = df.withColumn("rep_genre", rep_expr.otherwise(DEFAULT_REP_GENRE))
-        
+
         # 대표 장르 > 서브 장르 선택 - hash 기반 결정
-        
         df = df.withColumn("sub_genres", rep_to_subgenre(col("rep_genre")))
         df = df.withColumn("sub_size", size(col("sub_genres")))
-        
-        
+
         seed = concat_ws("::", col("stn_id"), col("obs_time"))                  # 같은 지점 + 같은 시간 => 같은 seed
         hash_dec = conv(substring(sha2(seed, 256), 1, 16), 16, 10).cast("long") # 숫자 타입 seed로 변환
-        
+
         df = df.withColumn(
             "rec_idx",
             (pmod(hash_dec, col("sub_size")) + lit(1)).cast("int")
@@ -249,19 +311,58 @@ class BookRecommender:
             )
             .drop("sub_genres", "sub_size", "rec_idx")
         )
-        
-        # 장르 일치하는 eBook 정보 Join
+
+        # eBook Join
         self._load_top_ebook_df()
-        
-        df = (df
+
+        # Tier1: rec_genre -> genre top1
+        df = (
+            df
             .join(
-                broadcast(self._top_ebook_df),
-                df["rec_genre"] == self._top_ebook_df["genre"],
+                broadcast(self._tier1_top_by_genre_df),
+                df["rec_genre"] == self._tier1_top_by_genre_df["tier1_genre"],
                 "left"
             )
-            .drop("genre")
+            .drop("tier1_genre")
         )
-        
+
+        # Tier2: rep_genre -> rep_genre에서 top1
+        df = (
+            df
+            .join(
+                broadcast(self._tier2_top_by_rep_df),
+                df["rep_genre"] == self._tier2_top_by_rep_df["tier2_rep_genre"],
+                "left"
+            )
+            .drop("tier2_rep_genre")
+        )
+
+        # Tier3: global default top1
+        df = (
+            df
+            .join(
+                broadcast(self._tier3_global_top_df),
+                lit(True),
+                "left"
+            )
+        )
+
+        # 최종 선택 (Tier1 > Tier2 > Tier3 순)
+        df = (
+            df
+            .withColumn("title", coalesce(col("tier1_title"), col("tier2_title"), col("tier3_title")))
+            .withColumn("author", coalesce(col("tier1_author"), col("tier2_author"), col("tier3_author")))
+            .withColumn("categoryName", coalesce(col("tier1_categoryName"), col("tier2_categoryName"), col("tier3_categoryName")))
+            .withColumn("description", coalesce(col("tier1_description"), col("tier2_description"), col("tier3_description")))
+            .withColumn("ebook_isbn13", coalesce(col("tier1_ebook_isbn13"), col("tier2_ebook_isbn13"), col("tier3_ebook_isbn13")))
+            .withColumn("ebook_link", coalesce(col("tier1_ebook_link"), col("tier2_ebook_link"), col("tier3_ebook_link")))
+            .drop(
+                "tier1_title", "tier1_author", "tier1_categoryName", "tier1_description", "tier1_ebook_isbn13", "tier1_ebook_link",
+                "tier2_title", "tier2_author", "tier2_categoryName", "tier2_description", "tier2_ebook_isbn13", "tier2_ebook_link",
+                "tier3_title", "tier3_author", "tier3_categoryName", "tier3_description", "tier3_ebook_isbn13", "tier3_ebook_link",
+            )
+        )
+
         return df.select(
             "obs_time", "obs_ts", "obs_yyyymmddhh", "stn_id",
             "ws", "ta", "hm", "rn", "sd_tot", "wc", "pop", "sky",
