@@ -203,11 +203,6 @@ services:
     command:
       - -c
       - |
-        # 디렉토리 생성 및 권한 맞추기
-        mkdir -p /opt/airflow/logs /opt/project/src/dags /opt/airflow/plugins
-        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/logs /opt/project/src/dags /opt/airflow/plugins
-
-        # DB 마이그레이션 및 사용자 생성
         airflow db migrate
         airflow users create \
           --username ${_AIRFLOW_WWW_USER_USERNAME:-airflow} \
