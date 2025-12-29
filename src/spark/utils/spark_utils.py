@@ -457,8 +457,6 @@ class Spark_utils:
         music_df = session.read.parquet(f"s3a://{self.bucket}/{file_path}")
         music_df.createOrReplaceTempView("music_df")
 
-
-
     # Forecast 
     def preprocessing_weather_forecast(self, raw_data):
         """

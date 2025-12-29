@@ -94,7 +94,6 @@ def run_forecast_stream(spark_utils, spark):
     log.info("Forecast streaming started.")
     return [redis_query, s3_query]
 
-
 def run_air_realtime_stream(spark_utils, spark):
 
     log.info("Initializing air-realtime stream...")
@@ -125,7 +124,6 @@ def run_air_realtime_stream(spark_utils, spark):
 
     log.info("Air-realtime streaming started.")
     return [air_redis_query, air_s3_query]
-
 
 def main():
     spark_utils = Spark_utils()
