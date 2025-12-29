@@ -368,5 +368,5 @@ class BookRecommender:
             "ws", "ta", "hm", "rn", "sd_tot", "wc", "pop", "sky",
             "title", "author", "categoryName",
             "description", "ebook_isbn13", "ebook_link",
-            'music_json'
+            'music_json', 'weather_code'
         )

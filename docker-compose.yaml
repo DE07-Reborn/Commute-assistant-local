@@ -195,6 +195,7 @@ services:
     restart: always
 
   # ---------- Airflow Init ----------
+  # ---------- Airflow Init ----------
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
@@ -211,6 +212,11 @@ services:
           --role Admin \
           --email admin@example.com
     user: "0:0"
+    volumes:
+      - ./src:/opt/project/src
+      - ./src/plugins:/opt/airflow/plugins
+      - ./src/logs:/opt/airflow/logs
+
 
   # ---------- Spark worker weather streaming ----------
   spark-weather-streaming:
