@@ -195,6 +195,7 @@ services:
     restart: always
 
   # ---------- Airflow Init ----------
+  # ---------- Airflow Init ----------
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
@@ -202,6 +203,11 @@ services:
     command:
       - -c
       - |
+        # 디렉토리 생성 및 권한 맞추기
+        mkdir -p /opt/airflow/logs /opt/project/src/dags /opt/airflow/plugins
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/logs /opt/project/src/dags /opt/airflow/plugins
+
+        # DB 마이그레이션 및 사용자 생성
         airflow db migrate
         airflow users create \
           --username ${_AIRFLOW_WWW_USER_USERNAME:-airflow} \
@@ -211,6 +217,11 @@ services:
           --role Admin \
           --email admin@example.com
     user: "0:0"
+    volumes:
+      - ./src:/opt/project/src
+      - ./src/plugins:/opt/airflow/plugins
+      - ./src/logs:/opt/airflow/logs
+
 
   # ---------- Spark worker kma weather streaming ----------
   spark-weather-streaming:
