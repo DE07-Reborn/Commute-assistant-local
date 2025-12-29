@@ -373,7 +373,6 @@ class Spark_utils:
                         'wc': str(row['wc']) if row['wc'] is not None else '',
                         'pop': str(row['pop']) if row['pop'] is not None else '',
                         'sky': str(row['sky']) if row['sky'] is not None else '',
-                        'ws': str(row['ws']) if row['ws'] is not None else '',
                         # 음악 추천 결과
                         'music' : row['music_json'],
                         'weather_code' : row['weather_code'],
