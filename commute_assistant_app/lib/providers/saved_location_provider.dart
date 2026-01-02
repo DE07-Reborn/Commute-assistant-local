@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import '../models/saved_location.dart';
 
 class SavedLocationProvider with ChangeNotifier {
-  List<SavedLocation> _locations = [
+  final List<SavedLocation> _locations = [
     SavedLocation(
       id: '1',
       name: '집',

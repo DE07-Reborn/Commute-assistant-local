@@ -1,5 +1,6 @@
 /// Flutter 앱에서 FastAPI를 사용하는 예시
 /// 기존 Redis 직접 연결 대신 FastAPI를 통해 데이터 조회
+library;
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;

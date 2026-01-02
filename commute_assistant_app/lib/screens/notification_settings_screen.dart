@@ -248,7 +248,7 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
         trailing: Switch(
           value: value,
           onChanged: onChanged,
-          activeColor: Colors.blue,
+          activeThumbColor: Colors.blue,
         ),
       ),
     );

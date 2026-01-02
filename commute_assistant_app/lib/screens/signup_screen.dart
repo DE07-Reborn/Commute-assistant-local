@@ -225,7 +225,7 @@ class _SignupScreenState extends State<SignupScreen> {
                 const SizedBox(height: 16),
                 // 성별
                 DropdownButtonFormField<String>(
-                  value: _selectedGender,
+                  initialValue: _selectedGender,
                   decoration: InputDecoration(
                     labelText: '성별',
                     prefixIcon: const Icon(Icons.person_outline),

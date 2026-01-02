@@ -838,7 +838,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final workAddress = authProvider.workAddress ?? '직장';
     
     // 도로명 주소부터만 추출하는 함수
-    String _extractRoadName(String address) {
+    String extractRoadName(String address) {
       // 주소 포맷: "시도 구군 (읍면동) 도로명 건물번호"
       final parts = address.split(' ');
       
@@ -851,8 +851,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return address;
     }
     
-    final homeRoadName = _extractRoadName(homeAddress);
-    final workRoadName = _extractRoadName(workAddress);
+    final homeRoadName = extractRoadName(homeAddress);
+    final workRoadName = extractRoadName(workAddress);
 
     return GestureDetector(
       onTap: () {

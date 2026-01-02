@@ -28,8 +28,8 @@ class RouteScreen extends StatefulWidget {
 
 class _RouteScreenState extends State<RouteScreen> {
   GoogleMapController? _mapController;
-  Set<Polyline> _polylines = {};
-  Set<Marker> _markers = {};
+  final Set<Polyline> _polylines = {};
+  final Set<Marker> _markers = {};
   RouteInfo? _lastRouteInfo;
   final DraggableScrollableController _draggableController = DraggableScrollableController();
   bool _isPanelExpanded = false;
@@ -722,7 +722,7 @@ class _RouteScreenState extends State<RouteScreen> {
                                                   ],
                                                 ],
                                               );
-                                            }).toList(),
+                                            }),
                                           ],
                                         ],
                                       ),
