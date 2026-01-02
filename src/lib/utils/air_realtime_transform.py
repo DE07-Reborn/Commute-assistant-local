@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 def safe_int(value):
     if value in (None, "-", ""):
@@ -14,6 +15,7 @@ def transform_realtime(raw_data):
 
     for item in raw_data['response']['body']['items']:
         data = {
+            "station_code": safe_int(item.get("stationCode")),
             "sido_name": item.get("sidoName"),
             "station_name": item.get("stationName"),
             "pm25": safe_int(item.get("pm25Value")),
@@ -21,7 +23,7 @@ def transform_realtime(raw_data):
             "pm25_flag": item.get("pm25Flag"),
             "pm10_flag": item.get("pm10Flag"),
             "data_time": item.get("dataTime"),
-            "storage_time": datetime.now().isoformat(),
+            "storage_time": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
         }
 
         transformed_data.append(data)

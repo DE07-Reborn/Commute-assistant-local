@@ -46,7 +46,7 @@ x-airflow-common: &airflow-common
     redis:
       condition: service_healthy
     kafka:
-      condition: service_started
+      condition: service_healthy
 
 # =========================
 # Services
@@ -120,6 +120,11 @@ services:
       KAFKA_LOG_RETENTION_HOURS: 72
     volumes:
       - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     restart: always
 
   # ---------- Spark Master ----------
