@@ -68,9 +68,12 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
+# 환경 변수로 가져온 Google Maps API 키 (한 번만 정의)
+GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY', '')
+
 # Google Maps API 서비스
 address_service = AddressService(
-    api_key=os.getenv('GOOGLE_MAPS_API_KEY', '')
+    api_key=GOOGLE_MAPS_API_KEY
 )
 
 # 대지역 리스트 (매칭용)
@@ -1031,6 +1034,26 @@ async def update_event_settings(
             status_code=500,
             detail=f"알림 설정 업데이트 중 오류가 발생했습니다: {str(e)}"
         )
+
+
+# Google Maps API 키 제공 엔드포인트
+class MapsConfigResponse(BaseModel):
+    """Maps API 설정 응답"""
+    google_maps_api_key: str
+
+
+@app.get("/api/v1/config/maps-api-key", response_model=MapsConfigResponse)
+async def get_maps_api_key():
+    """
+    Google Maps API 키를 Flutter 앱에 제공
+    환경 변수 GOOGLE_MAPS_API_KEY에서 가져온 값을 반환
+    """
+    if not GOOGLE_MAPS_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Google Maps API 키가 설정되지 않았습니다"
+        )
+    return MapsConfigResponse(google_maps_api_key=GOOGLE_MAPS_API_KEY)
 
 
 @app.get("/health")

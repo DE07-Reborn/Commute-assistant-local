@@ -68,9 +68,12 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
+# 환경 변수로 가져온 Google Maps API 키 (한 번만 정의)
+GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY', '')
+
 # Google Maps API 서비스
 address_service = AddressService(
-    api_key=os.getenv('GOOGLE_MAPS_API_KEY', '')
+    api_key=GOOGLE_MAPS_API_KEY
 )
 
 # 대지역 리스트 (매칭용)
@@ -1033,6 +1036,26 @@ async def update_event_settings(
         )
 
 
+# Google Maps API 키 제공 엔드포인트
+class MapsConfigResponse(BaseModel):
+    """Maps API 설정 응답"""
+    google_maps_api_key: str
+
+
+@app.get("/api/v1/config/maps-api-key", response_model=MapsConfigResponse)
+async def get_maps_api_key():
+    """
+    Google Maps API 키를 Flutter 앱에 제공
+    환경 변수 GOOGLE_MAPS_API_KEY에서 가져온 값을 반환
+    """
+    if not GOOGLE_MAPS_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Google Maps API 키가 설정되지 않았습니다"
+        )
+    return MapsConfigResponse(google_maps_api_key=GOOGLE_MAPS_API_KEY)
+
+
 @app.get("/health")
 async def health_check():
     """헬스 체크"""
@@ -1145,11 +1168,16 @@ async def match_air_places(request: AirMatchRequest):
                 pm25_level = data.get('pm25_level')
                 mask_required = data.get('mask_required')
 
-                # 나쁨이면 마스크 필요로 간주 (한국어 '나쁨' 체크)
+                # pm*_level이 '나쁨' 또는 '매우나쁨'이면 마스크 필요로 간주
                 is_bad = False
-                if pm10_level and '나쁨' in pm10_level:
-                    is_bad = True
-                if pm25_level and '나쁨' in pm25_level:
+                def _level_is_bad(v):
+                    if not v:
+                        return False
+                    val = v.decode() if hasattr(v, 'decode') else v
+                    val = val.strip()
+                    return val in ('나쁨', '매우나쁨')
+
+                if _level_is_bad(pm10_level) or _level_is_bad(pm25_level):
                     is_bad = True
 
                 if is_bad:
