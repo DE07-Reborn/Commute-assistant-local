@@ -5,7 +5,7 @@ from pyspark.sql.functions import (
     explode, min, max, avg, struct,
     collect_list, expr, row_number,
     substring, concat_ws, coalesce, to_json,
-    
+    trim, first, max as spark_max, to_date,from_utc_timestamp
 )
 from pyspark.sql.window import Window
 import json
@@ -66,6 +66,7 @@ class Spark_utils:
             .config("spark.sql.adaptive.enabled", "true")
             .config("spark.sql.shuffle.partitions", "4")
             .config("spark.streaming.kafka.maxRatePerPartition", "800")
+            .config("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", "false")
 
             # Redis
             .config("spark.redis.host", self.redis_host)
@@ -252,8 +253,9 @@ class Spark_utils:
             )
         )
 
-    def preprocessing_air_quality(self, raw_data):
+    def preprocessing_air_realtime(self, raw_data):
         schema = StructType([
+            StructField("station_code", IntegerType()),
             StructField("sido_name", StringType()),
             StructField("station_name", StringType()),
             StructField("pm25", IntegerType()),
@@ -269,6 +271,7 @@ class Spark_utils:
             .selectExpr("CAST(value AS STRING) as json_str")
             .select(from_json(col("json_str"), schema).alias("d"))
             .select("d.*")
+            .withColumn("sido_name", trim(col("sido_name")))
             .withColumn(
                 "obs_ts",
                 to_timestamp(col("data_time"), "yyyy-MM-dd HH:mm")
@@ -291,12 +294,98 @@ class Spark_utils:
             )
             # 마스크 추천
             .withColumn(
-                "mask_required",
+                "realtime_mask_required",
                 when(
                     (col("pm10") > 80) | (col("pm25") > 35),
                     lit("Y")
                 ).otherwise(lit("N"))
             )
+        )
+
+        return df
+
+    def preprocessing_air_forecast(self, raw_data):
+        schema = StructType([
+            StructField("inform_code", StringType()),
+            StructField("inform_grade", StringType()),
+            StructField("inform_data", StringType()),
+            StructField("data_time", StringType()),
+            StructField("storage_time", StringType()),
+        ])
+
+        df = (
+            raw_data
+            .selectExpr("CAST(value AS STRING) as json_str")
+            .select(from_json(col("json_str"), schema).alias("d"))
+            .select("d.*")
+        )
+
+        # informGrade: "서울 : 좋음,제주 : 보통,..." -> explode
+        df = df.withColumn("grade_token", explode(split(col("inform_grade"), ",")))
+
+        df = df.withColumn("grade_token", trim(col("grade_token")))
+        df = df.withColumn("region_raw", trim(split(col("grade_token"), ":")[0]))
+        df = df.withColumn("grade", trim(split(col("grade_token"), ":")[1]))
+
+        # 지역 정규화
+        df = df.withColumn(
+            "region",
+            when(col("region_raw").isin("경기남부", "경기북부"), lit("경기"))
+            .when(col("region_raw").isin("영동", "영서"), lit("강원"))
+            .otherwise(col("region_raw"))
+        )
+
+        # data_time 정규화 (예: "2025-12-31 23:00")
+        #df = df.withColumn("inform_date", to_date(col("inform_data"), "yyyy-MM-dd"))
+        df = df.withColumn("data_time_ts", to_timestamp(col("data_time"), "yyyy-MM-dd HH:mm"))
+        #df = df.withColumn("data_time_yyyymmddhh", date_format(col("data_time_ts"), "yyyyMMddHH"))
+
+        # 2) 등급 점수화
+        df = df.withColumn(
+            "grade_score",
+            when(col("grade") == "좋음", lit(1))
+            .when(col("grade") == "보통", lit(2))
+            .when(col("grade") == "나쁨", lit(3))
+            .when(col("grade") == "매우나쁨", lit(4))
+            .otherwise(lit(None))
+        )
+
+        # 3) 최악값 집계 (region + 날짜 + 발표시각 + PM코드 기준)
+        df = (
+            df.groupBy("region", "inform_data", "data_time_ts", "inform_code")
+            .agg(spark_max("grade_score").alias("grade_score"))
+        )
+
+        # 4) 점수 -> 등급 복원
+        df = df.withColumn(
+            "grade",
+            when(col("grade_score") == 1, lit("좋음"))
+            .when(col("grade_score") == 2, lit("보통"))
+            .when(col("grade_score") == 3, lit("나쁨"))
+            .when(col("grade_score") == 4, lit("매우나쁨"))
+            .otherwise(lit(None))
+        )
+
+        # PM10/PM25를 컬럼으로 펴서 조인 편하게
+        df = (
+            df.groupBy("region", "inform_data", "data_time_ts")
+            .agg(
+                first(when(col("inform_code") == "PM10", col("grade")), True).alias("pm10_forecast_grade"),
+                first(when(col("inform_code") == "PM25", col("grade")), True).alias("pm25_forecast_grade"),
+            )
+        )
+        df = df.withColumn("data_time_yyyymmddhh", date_format(col("data_time_ts"), "yyyyMMddHH"))
+        #df = df.withColumn("data_time", date_format(col("data_time_ts"), "yyyy-MM-dd HH:mm"))
+        df = df.withColumn("inform_date", to_date(col("inform_data"), "yyyy-MM-dd"))
+
+        # 예보 마스크 추천
+        df = df.withColumn(
+            "forecast_mask_required",
+            when(
+                (col("pm10_forecast_grade").isin("나쁨", "매우나쁨")) |
+                (col("pm25_forecast_grade").isin("나쁨", "매우나쁨")),
+                lit("Y")
+            ).otherwise(lit("N"))
         )
 
         return df
@@ -325,13 +414,13 @@ class Spark_utils:
             self.log.error(f"Batch {batch_id}: S3 write error: {e}")
             raise
 
-    def save_batch_to_s3_air(self, batch_df, batch_id):
+    def save_batch_to_s3_air_realtime(self, batch_df, batch_id):
         """
             Save spark dataframe as parquet in s3 folder
         """
         try:
             count = batch_df.count()
-            s3_path = f"s3a://{self.bucket}/air-quality/hourly-data"
+            s3_path = f"s3a://{self.bucket}/air-realtime/hourly-data"
             
             self.log.info(f"Batch {batch_id}: Writing {count} records to S3...")
             
@@ -345,6 +434,30 @@ class Spark_utils:
             
             self.log.info(f"Batch {batch_id}: Successfully saved {count} records to S3 - {s3_path}")
             
+        except Exception as e:
+            self.log.error(f"Batch {batch_id}: S3 write error: {e}")
+            raise
+
+    def save_batch_to_s3_air_forecast(self, batch_df, batch_id):
+        try:
+            if batch_df is None or batch_df.rdd.isEmpty():
+                self.log.info(f"Batch {batch_id}: Empty batch, skip S3 write")
+                return
+
+            s3_path = f"s3a://{self.bucket}/air-forecast/hourly-data"
+
+            (
+                batch_df
+                .write
+                .mode("overwrite")
+                .option("compression", "snappy")
+                .option("maxRecordsPerFile", 20000)
+                .partitionBy("data_time_yyyymmddhh")
+                .parquet(s3_path)
+            )
+
+            self.log.info(f"Batch {batch_id}: Successfully saved records to S3 - {s3_path}")
+
         except Exception as e:
             self.log.error(f"Batch {batch_id}: S3 write error: {e}")
             raise
@@ -404,7 +517,7 @@ class Spark_utils:
             self.log.error(f"Batch {batch_id}: Redis batch write error: {e}")
             raise
 
-    def save_batch_to_redis_air(self, batch_df, batch_id):
+    def save_batch_to_redis_air_realtime(self, batch_df, batch_id):
         try:
             rows = batch_df.collect()
 
@@ -420,16 +533,17 @@ class Spark_utils:
 
             for row in rows:
                 try:
-                    key = f"air:{row['sido_name']}:{row['station_name']}"
+                    key = f"air-realtime:{row['station_code']}"
 
                     air_data = {
+                        "station_code": str(row["station_code"]) if row["station_code"] is not None else "",
                         "sido_name": row["sido_name"] or "",
                         "station_name": row["station_name"] or "",
                         "pm10": str(row["pm10"]) if row["pm10"] is not None else "",
                         "pm25": str(row["pm25"]) if row["pm25"] is not None else "",
                         "pm10_level": row["pm10_level"] or "",
                         "pm25_level": row["pm25_level"] or "",
-                        "mask_required": row["mask_required"] or "",
+                        "realtime_mask_required": row["realtime_mask_required"] or "",
                         "data_time": row["data_time"] or "",
                     }
 
@@ -452,6 +566,98 @@ class Spark_utils:
             self.log.error(f"Batch {batch_id}: Redis air-quality batch write error: {e}")
             raise
 
+    def save_batch_to_redis_air_forecast(self, batch_df, batch_id):
+        try:
+            rows = batch_df.collect()
+            if not rows:
+                self.log.info(f"Batch {batch_id}: No air-forecast data to write to Redis")
+                return
+
+            r = redis.Redis(
+                host=self.redis_host,
+                port=self.redis_port,
+                decode_responses=True
+            )
+
+            for row in rows:
+                try:
+                    key = f"air-forecast:{row['region']}:{row['inform_date']}"
+
+                    data = {
+                        "region": row["region"] or "",
+                        "inform_date": str(row["inform_date"]) if row["inform_date"] is not None else "",
+                        "data_time": str(row["data_time"]) if row["data_time"] is not None else "",
+                        "pm10_forecast_grade": row["pm10_forecast_grade"] or "",
+                        "pm25_forecast_grade": row["pm25_forecast_grade"] or "",
+                        "forecast_mask_required": row["forecast_mask_required"] or "",
+                    }
+
+                    r.hset(key, mapping=data)
+                    r.expire(key, 86400)
+
+                    self.log.info(f"Batch {batch_id}: Saved air-forecast to Redis - {key}")
+
+                except Exception as row_error:
+                    self.log.error(f"Batch {batch_id}: Error saving air-forecast row: {row_error}")
+                    continue
+
+            self.log.info(f"Batch {batch_id}: Saved {len(rows)} air-forecast records")
+
+        except Exception as e:
+            self.log.error(f"Batch {batch_id}: Redis air-forecast batch write error: {e}")
+            raise
+
+    def save_batch_to_redis_air_summary(self, batch_df, batch_id):
+        try:
+            rows = batch_df.collect()
+            if not rows:
+                self.log.info(f"Batch {batch_id}: No air-summary data to write to Redis")
+                return
+
+            r = redis.Redis(
+                host=self.redis_host,
+                port=self.redis_port,
+                decode_responses=True
+            )
+
+            for row in rows:
+                try:
+                    key = f"air-summary:{row['station_code']}"
+                    data = {
+                        "station_code": str(row["station_code"]) if row["station_code"] is not None else "",
+                        # 실시간
+                        "sido_name": row["sido_name"] or "",
+                        "pm10": str(row["pm10"]) if row["pm10"] is not None else "",
+                        "pm25": str(row["pm25"]) if row["pm25"] is not None else "",
+                        "pm10_level": row["pm10_level"] or "",
+                        "pm25_level": row["pm25_level"] or "",
+                        "realtime_mask_required": row["realtime_mask_required"] or "",
+
+                        # 예보
+                        "pm10_forecast_level": row["pm10_forecast_grade"] or "",
+                        "pm25_forecast_level": row["pm25_forecast_grade"] or "",
+                        "forecast_mask_required": row["forecast_mask_required"] or "",
+                        "inform_date": str(row["inform_date"]) if row["inform_date"] is not None else "",
+
+                        # 결합 추천
+                        "mask_advice": row["mask_advice"] or "",
+                        "data_time": row["data_time"] or "",
+                    }
+
+                    r.hset(key, mapping=data)
+                    r.expire(key, 86400)
+
+                    self.log.info(f"Batch {batch_id}: Saved air-summary to Redis - {key}")
+
+                except Exception as row_error:
+                    self.log.error(f"Batch {batch_id}: Error saving air-summary row: {row_error}")
+                    continue
+
+            self.log.info(f"Batch {batch_id}: Saved {len(rows)} air-summary records")
+
+        except Exception as e:
+            self.log.error(f"Batch {batch_id}: Redis air-summary batch write error: {e}")
+            raise
 
     def weather_to_class(self, session, file_path, weather_df):
         weather_df.createOrReplaceTempView("weather_df")

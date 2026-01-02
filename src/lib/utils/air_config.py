@@ -8,7 +8,8 @@ class Settings:
     AWS_REGION = os.getenv("AWS_REGION")
 
     # API 관련 설정
-    AIR_API_URL = os.getenv("AIR_API_URL")
+    AIR_REALTIME_API_URL = os.getenv("AIR_REALTIME_API_URL")
+    AIR_FORECAST_API_URL = os.getenv("AIR_FORECAST_API_URL")
     AIR_API_KEY = os.getenv("AIR_API_KEY")
     
     # 시도 리스트 설정
@@ -21,5 +22,6 @@ class Settings:
         "KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"
     )
     KAFKA_TOPIC_REALTIME = os.getenv("KAFKA_TOPIC_REALTIME", "air-quality-realtime")
+    KAFKA_TOPIC_FORECAST = os.getenv("KAFKA_TOPIC_FORECAST", "air-quality-forecast")
 
 settings = Settings()

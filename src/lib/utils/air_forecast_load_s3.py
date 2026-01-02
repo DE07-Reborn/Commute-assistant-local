@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import boto3
@@ -8,9 +9,6 @@ from utils.air_config import settings
 def save_raw_to_s3(
     raw_data: dict,
 ):
-    """
-    실시간 대기질 API 원본 데이터를 S3에 저장
-    """
 
     # S3 client 생성
     s3 = boto3.client(
@@ -22,11 +20,12 @@ def save_raw_to_s3(
 
     # 측정 시각 기준 파티셔닝
     data_time = raw_data["response"]["body"]["items"][0].get("dataTime")
-    data_time_nm = data_time.replace(":", "-").replace(" ", "_")
+    nm = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{2})시", data_time)
+    data_time_nm = f"{nm.group(1)}_{nm.group(2)}-00"
     run_ts = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
 
     key = (
-        f"air-api/raw/real-time/"
+        f"air-api/raw/forecast/"
         f"dataTime={data_time_nm}/"
         f"{run_ts}.json"
     )

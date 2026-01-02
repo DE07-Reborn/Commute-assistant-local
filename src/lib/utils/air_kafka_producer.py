@@ -1,7 +1,7 @@
 import json
 import logging
 from kafka import KafkaProducer
-from utils.air_realtime_config import settings
+from utils.air_config import settings
 
 class KafkaProducerUtils:
     def __init__(self):

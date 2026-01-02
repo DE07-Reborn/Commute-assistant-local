@@ -2,9 +2,9 @@ from airflow import DAG
 from airflow.decorators import task
 from datetime import datetime, timedelta
 
-from utils.air_realtime_extract import extract_realtime
-from utils.air_realtime_transform import transform_realtime
-from utils.air_realtime_load_s3 import save_raw_to_s3
+from utils.air_forecast_extract import extract_forecast
+from utils.air_forecast_load_s3 import save_raw_to_s3
+from utils.air_forecast_transform import transform_forecast
 from utils.air_kafka_producer import KafkaProducerUtils
 from utils.air_config import settings
 
@@ -15,17 +15,17 @@ default_args = {
 }
 
 with DAG(
-    dag_id="air_quality_realtime_collect",
+    dag_id="air_quality_forecast_collect",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="18 * * * *",
+    schedule_interval="45 5,11,17,23 * * *",
     catchup=False,
     default_args=default_args,
-    tags=["air-quality", "realtime"],
+    tags=["air-quality", "forecast"],
 ) as dag:
 
     @task(task_id="extract")
     def extract():
-        return extract_realtime()
+        return extract_forecast()
 
     @task(task_id="save_raw_s3")
     def save_raw(raw_data: dict):
@@ -33,15 +33,15 @@ with DAG(
 
     @task(task_id="transform_for_kafka")
     def transform(raw_data: dict):
-        return transform_realtime(raw_data)
+        return transform_forecast(raw_data)
 
     @task(task_id="publish_kafka")
     def publish(transformed: list[dict]):
         producer = KafkaProducerUtils()
         for record in transformed:
-            key = f"{record['station_code']}"
+            key = f"{record['inform_code']}|{record['inform_data']}|{record['data_time']}"
             producer.send(
-                topic=settings.KAFKA_TOPIC_REALTIME,
+                topic=settings.KAFKA_TOPIC_FORECAST,
                 key=key,
                 message=record,
             )
