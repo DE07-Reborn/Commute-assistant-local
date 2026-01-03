@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/places_service.dart';
-import '../providers/places_provider.dart';
 
 class AddressAutocompleteField extends StatefulWidget {
   final TextEditingController controller;
@@ -41,7 +40,7 @@ class _AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _placesService = Provider.of<PlacesProvider>(context, listen: false).placesService;
+    _placesService = Provider.of<PlacesService>(context);
   }
 
   @override
@@ -229,4 +228,3 @@ class _AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
     );
   }
 }
-
