@@ -1,7 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/route_provider.dart';
+import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../models/route_info.dart';
 
 class RouteScreen extends StatefulWidget {
@@ -11,6 +16,8 @@ class RouteScreen extends StatefulWidget {
   final double? originLng;
   final double? destLat;
   final double? destLng;
+  final bool showApprovalPrompt;
+  final bool autoApprove;
 
   const RouteScreen({
     super.key,
@@ -20,6 +27,8 @@ class RouteScreen extends StatefulWidget {
     this.originLng,
     this.destLat,
     this.destLng,
+    this.showApprovalPrompt = false,
+    this.autoApprove = false,
   });
 
   @override
@@ -33,10 +42,22 @@ class _RouteScreenState extends State<RouteScreen> {
   RouteInfo? _lastRouteInfo;
   final DraggableScrollableController _draggableController = DraggableScrollableController();
   bool _isPanelExpanded = false;
+  bool _routeApproved = false;
+  bool _isMapReady = false;
+  bool _isApproving = false;
+  DateTime? _departAt;
+  DateTime? _arriveBy;
+  String? _targetCountdown;
+  Timer? _countdownTimer;
 
   @override
   void initState() {
     super.initState();
+    if (widget.autoApprove) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _approveRoute(auto: true);
+      });
+    }
     // 드래그 패널 크기 변경 리스너
     _draggableController.addListener(() {
       if (_draggableController.isAttached) {
@@ -49,30 +70,141 @@ class _RouteScreenState extends State<RouteScreen> {
         }
       }
     });
-    
-    // 초기값이 있으면 경로 검색 수행
-    if (widget.initialOrigin != null && widget.initialDestination != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          final routeProvider = context.read<RouteProvider>();
-          routeProvider.searchRoute(
-            origin: widget.initialOrigin!,
-            destination: widget.initialDestination!,
-          );
-        }
-      });
-    }
+
+    _loadInitialRoute();
   }
 
   @override
   void dispose() {
     _mapController?.dispose();
+    _mapController = null;
+    _isMapReady = false;
+    _countdownTimer?.cancel();
     _draggableController.dispose();
     super.dispose();
   }
 
+  void _loadInitialRoute() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+
+      final routeProvider = context.read<RouteProvider>();
+      if (routeProvider.routeInfo != null || routeProvider.isLoading) {
+        return;
+      }
+
+      final authProvider = context.read<AuthProvider>();
+      final origin = widget.initialOrigin ?? authProvider.homeAddress;
+      final destination = widget.initialDestination ?? authProvider.workAddress;
+      if (origin == null || destination == null) {
+        return;
+      }
+
+      await routeProvider.searchRoute(
+        origin: origin,
+        destination: destination,
+      );
+    });
+  }
+
+  Future<void> _approveRoute({bool auto = false}) async {
+    if (_isApproving) return;
+    setState(() {
+      _isApproving = true;
+    });
+
+    final authProvider = context.read<AuthProvider>();
+    final userId = authProvider.userId;
+    if (userId == null) {
+      if (mounted) {
+        setState(() {
+          _isApproving = false;
+        });
+      }
+      return;
+    }
+
+    final apiService = context.read<ApiService>();
+    try {
+      final routeState = await apiService.getRouteState(userId);
+      final departAtRaw = routeState?['depart_at']?.toString();
+      final arriveByRaw = routeState?['arrive_by']?.toString();
+      if (departAtRaw == null || departAtRaw.isEmpty) {
+        return;
+      }
+
+      await apiService.approveRoute(
+        userId: userId,
+        departAt: departAtRaw,
+      );
+
+      _departAt = DateTime.tryParse(departAtRaw);
+      _arriveBy = arriveByRaw != null && arriveByRaw.isNotEmpty
+          ? DateTime.tryParse(arriveByRaw)
+          : null;
+      _startCountdown();
+
+      if (!mounted) return;
+      setState(() {
+        _routeApproved = true;
+      });
+      if (!auto) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('경로를 승인했어요.'),
+          ),
+        );
+      }
+    } catch (e) {
+      print('경로 승인 저장 오류: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isApproving = false;
+        });
+      }
+    }
+  }
+
+  void _startDepartCountdown() {
+    _startCountdown();
+  }
+
+  void _startCountdown() {
+    _countdownTimer?.cancel();
+    _updateCountdown();
+    _countdownTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _updateCountdown();
+    });
+  }
+
+  void _updateCountdown() {
+    if (!mounted) return;
+    final target = _arriveBy ?? _departAt;
+    if (target == null) return;
+    final formatted = _formatCountdown(target);
+    setState(() {
+      _targetCountdown = formatted;
+    });
+  }
+
+  String _formatCountdown(DateTime targetTime) {
+    final diff = targetTime.difference(DateTime.now());
+    if (diff.inMinutes <= 0) {
+      return '지금 출발하세요';
+    }
+    if (diff.inHours >= 1) {
+      final hours = diff.inHours;
+      final minutes = diff.inMinutes % 60;
+      return '${hours}시간 ${minutes}분 남음';
+    }
+    return '${diff.inMinutes}분 남음';
+  }
+
   void _updateMap(RouteInfo? routeInfo) {
-    if (routeInfo == null) return;
+    if (!mounted || !_isMapReady || _mapController == null || routeInfo == null) {
+      return;
+    }
     
     // 같은 경로 정보면 업데이트하지 않음
     if (_lastRouteInfo == routeInfo) return;
@@ -203,6 +335,68 @@ class _RouteScreenState extends State<RouteScreen> {
     }
   }
 
+  Widget _buildApprovedBanner(RouteInfo routeInfo) {
+    final departAt = _departAt;
+    final arriveBy = _arriveBy;
+    final arriveText = arriveBy != null
+        ? DateFormat('HH:mm', 'ko').format(arriveBy)
+        : null;
+    final departText = departAt != null
+        ? DateFormat('HH:mm', 'ko').format(departAt)
+        : null;
+    final countdown = _targetCountdown ??
+        ((arriveBy ?? departAt) != null ? _formatCountdown(arriveBy ?? departAt!) : null);
+    final summary = '${_getTravelModeName(routeInfo.travelMode)} · ${routeInfo.duration} · ${routeInfo.distance}';
+
+    return Material(
+      elevation: 3,
+      borderRadius: BorderRadius.circular(12),
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Icon(
+              Icons.schedule,
+              color: Colors.blue.shade700,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    arriveText != null ? '출근 시간 $arriveText' : '출근 시간 확인 중',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    summary,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                  ),
+                  if (departText != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      '출발 시간 $departText',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    ),
+                  ],
+                  if (countdown != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      countdown,
+                      style: TextStyle(fontSize: 12, color: Colors.blue.shade700),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -214,10 +408,14 @@ class _RouteScreenState extends State<RouteScreen> {
       body: Consumer<RouteProvider>(
         builder: (context, routeProvider, _) {
           if (routeProvider.isLoading) {
+            _mapController = null;
+            _isMapReady = false;
             return const Center(child: CircularProgressIndicator());
           }
 
           if (routeProvider.error != null) {
+            _mapController = null;
+            _isMapReady = false;
             return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -248,8 +446,10 @@ class _RouteScreenState extends State<RouteScreen> {
           final routeInfo = routeProvider.routeInfo;
           if (routeInfo != null) {
             // 경로 정보가 있으면 지도 업데이트
-            if (_mapController != null) {
-              _updateMap(routeInfo);
+            if (_lastRouteInfo != routeInfo) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _updateMap(routeInfo);
+              });
             }
             
             return Stack(
@@ -262,6 +462,7 @@ class _RouteScreenState extends State<RouteScreen> {
                   ),
                   onMapCreated: (controller) {
                     _mapController = controller;
+                    _isMapReady = true;
                     // 지도가 준비되면 경로 정보 업데이트
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (mounted && routeProvider.routeInfo != null) {
@@ -274,6 +475,55 @@ class _RouteScreenState extends State<RouteScreen> {
                   myLocationEnabled: true,
                   myLocationButtonEnabled: true,
                 ),
+                if (widget.showApprovalPrompt && !_routeApproved)
+                  Positioned(
+                    top: 12,
+                    left: 16,
+                    right: 16,
+                    child: Material(
+                      elevation: 3,
+                      borderRadius: BorderRadius.circular(12),
+                      color: Colors.white,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.route,
+                              color: Colors.blue.shade700,
+                            ),
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Text(
+                                '추천 경로가 준비됐어요. 승인하면 알림이 이어집니다.',
+                                style: TextStyle(fontSize: 13),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            ElevatedButton(
+                              onPressed: _isApproving ? null : () => _approveRoute(),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue.shade700,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                              ),
+                              child: const Text('승인'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                if (_routeApproved)
+                  Positioned(
+                    top: 12,
+                    left: 16,
+                    right: 16,
+                    child: _buildApprovedBanner(routeInfo),
+                  ),
                 // 드래그 가능한 경로 옵션 패널
                 DraggableScrollableSheet(
                   controller: _draggableController,
@@ -742,6 +992,8 @@ class _RouteScreenState extends State<RouteScreen> {
           }
 
           // 초기 상태
+          _mapController = null;
+          _isMapReady = false;
           return GoogleMap(
             initialCameraPosition: const CameraPosition(
               target: LatLng(37.5665, 126.9780),
@@ -749,6 +1001,7 @@ class _RouteScreenState extends State<RouteScreen> {
             ),
             onMapCreated: (controller) {
               _mapController = controller;
+              _isMapReady = true;
             },
             myLocationEnabled: true,
             myLocationButtonEnabled: true,
@@ -758,4 +1011,3 @@ class _RouteScreenState extends State<RouteScreen> {
     );
   }
 }
-

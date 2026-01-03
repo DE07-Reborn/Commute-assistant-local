@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/weather_provider.dart';
+import '../services/api_service.dart';
+import '../services/notification_service.dart';
 import 'signup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -40,6 +42,8 @@ class _LoginScreenState extends State<LoginScreen> {
         // 날씨 정보 다시 로드
         final weatherProvider = context.read<WeatherProvider>();
         weatherProvider.loadWeather();
+
+        await _scheduleCommuteNotifications();
         
         Navigator.of(context).pop(); // 로그인 화면 닫기
         ScaffoldMessenger.of(context).showSnackBar(
@@ -56,6 +60,46 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
       }
+    }
+  }
+
+  Future<void> _scheduleCommuteNotifications() async {
+    final authProvider = context.read<AuthProvider>();
+    final userId = authProvider.userId;
+    if (userId == null) {
+      print('[Notification] schedule aborted: userId is null');
+      return;
+    }
+
+    final apiService = context.read<ApiService>();
+    final notificationService = context.read<NotificationService>();
+
+    try {
+      print('[Notification] fetching route state userId=$userId');
+      final routeState = await apiService.getRouteState(userId);
+      if (routeState == null) {
+        print('[Notification] routeState is null');
+        return;
+      }
+
+      final departAtRaw = routeState['depart_at']?.toString();
+      if (departAtRaw == null || departAtRaw.isEmpty) {
+        print('[Notification] depart_at missing in routeState=$routeState');
+        return;
+      }
+
+      final departAt = DateTime.tryParse(departAtRaw);
+      if (departAt == null) {
+        print('[Notification] depart_at parse failed: $departAtRaw');
+        return;
+      }
+
+      print('[Notification] routeState depart_at=$departAt');
+      await notificationService.scheduleCommuteNotifications(
+        departAt: departAt,
+      );
+    } catch (e) {
+      print('[Notification] schedule error: $e');
     }
   }
 
@@ -187,4 +231,3 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
-

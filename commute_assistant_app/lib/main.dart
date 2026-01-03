@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -7,19 +8,22 @@ import 'providers/route_provider.dart';
 import 'providers/weather_provider.dart';
 import 'providers/saved_location_provider.dart';
 import 'providers/recent_search_provider.dart';
-import 'providers/places_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/event_settings_provider.dart';
+import 'providers/notification_history_provider.dart';
 import 'services/maps_service.dart';
 import 'services/weather_service_api.dart';
 import 'services/recommendation_service_api.dart';
 import 'services/places_service.dart';
 import 'services/api_service.dart';
 import 'services/location_service.dart';
+import 'services/notification_service.dart';
 
 void main() {
   runApp(const MyApp());
 }
+
+const bool kNotificationTestMode = true;
 
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
@@ -30,16 +34,35 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   late Future<String> _apiKeyFuture;
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  late final NotificationService _notificationService;
   
   @override
   void initState() {
     super.initState();
+    _notificationService = NotificationService(
+      navigatorKey: _navigatorKey,
+      testMode: kNotificationTestMode,
+    );
+    _notificationService.initialize();
     // FastAPI에서 Google Maps API 키 로드
     _apiKeyFuture = _fetchGoogleMapsApiKey();
   }
+
+  String _getApiBaseUrl() {
+    if (kIsWeb) {
+      return 'http://localhost:8000';
+    }
+    return defaultTargetPlatform == TargetPlatform.android
+        ? 'http://10.0.2.2:8000'
+        : 'http://localhost:8000';
+  }
   
+  static const String _fallbackGoogleMapsApiKey =
+      'AIzaSyD0R-e5sVfzsjbpq1g_hY4eS452dZ4ZL78';
+
   Future<String> _fetchGoogleMapsApiKey() async {
-    const String apiBaseUrl = 'http://10.0.2.2:8000';
+    final String apiBaseUrl = _getApiBaseUrl();
     try {
       final response = await http.get(
         Uri.parse('$apiBaseUrl/api/v1/config/maps-api-key'),
@@ -53,12 +76,12 @@ class _MyAppState extends State<MyApp> {
       } else {
         print('❌ FastAPI에서 API 키 로드 실패: ${response.statusCode}');
         // 폴백: 기본값 사용
-        return 'AIzaSyD0R-e5sVfzsjbpq1g_hY4eS452dZ4ZL78';
+        return _fallbackGoogleMapsApiKey;
       }
     } catch (e) {
       print('⚠️ FastAPI에서 API 키 로드 중 오류: $e');
       // 폴백: 기본값 사용
-      return 'AIzaSyD0R-e5sVfzsjbpq1g_hY4eS452dZ4ZL78';
+      return _fallbackGoogleMapsApiKey;
     }
   }
 
@@ -67,31 +90,25 @@ class _MyAppState extends State<MyApp> {
     return FutureBuilder<String>(
       future: _apiKeyFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          // API 키 로드 중에는 로딩 화면 표시
-          return MaterialApp(
-            title: '출퇴근 도우미',
-            home: Scaffold(
-              body: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: 16),
-                    const Text('앱 초기화 중...'),
-                  ],
-                ),
-              ),
-            ),
-          );
-        }
-        
         if (snapshot.hasError) {
           print('❌ API 키 로드 오류: ${snapshot.error}');
         }
         
         // API 키 가져오기 (에러 시 폴백값 사용)
-        final googleMapsApiKey = snapshot.data ?? 'AIzaSyD0R-e5sVfzsjbpq1g_hY4eS452dZ4ZL78';
+        final googleMapsApiKey =
+            snapshot.data ?? _fallbackGoogleMapsApiKey;
+        final isFallbackKey = googleMapsApiKey == _fallbackGoogleMapsApiKey;
+        if (snapshot.connectionState == ConnectionState.done) {
+          final keySuffix = googleMapsApiKey.length >= 4
+              ? googleMapsApiKey.substring(googleMapsApiKey.length - 4)
+              : googleMapsApiKey;
+          print(
+            isFallbackKey
+                ? '⚠️ Google Maps API 키 폴백 사용 중'
+                : '✅ Google Maps API 키 서버값 사용 중',
+          );
+          print('🔎 Google Maps API 키 끝 4자리: $keySuffix');
+        }
         
         // ============================================
         // FastAPI 설정
@@ -104,7 +121,7 @@ class _MyAppState extends State<MyApp> {
         // - 실제 디바이스에서 접근: PC의 실제 IP 주소 사용 (예: 'http://192.168.0.100:8000')
         // - FastAPI 서버가 실행 중이어야 합니다
         //
-        const String apiBaseUrl = 'http://10.0.2.2:8000'; // FastAPI 서버 주소
+        final String apiBaseUrl = _getApiBaseUrl();
         const String stationId = '108'; // 서울 기본 관측소 ID (로그인 안 했을 때 사용)
 
         // 서비스 인스턴스 생성
@@ -128,6 +145,7 @@ class _MyAppState extends State<MyApp> {
 
         return MultiProvider(
           providers: [
+            Provider<NotificationService>.value(value: _notificationService),
             // ============================================
             // Google Maps 관련 Provider
             // ============================================
@@ -198,7 +216,7 @@ class _MyAppState extends State<MyApp> {
               create: (_) => RecentSearchProvider(),
             ),
             ChangeNotifierProvider(
-              create: (_) => PlacesProvider(placesService: placesService),
+              create: (_) => NotificationHistoryProvider(),
             ),
             ChangeNotifierProvider(
               create: (_) => EventSettingsProvider(apiService: apiService),
@@ -209,6 +227,7 @@ class _MyAppState extends State<MyApp> {
           child: MaterialApp(
             title: '출퇴근 도우미',
             debugShowCheckedModeBanner: false,
+            navigatorKey: _navigatorKey,
             theme: ThemeData(
               colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
               useMaterial3: true,

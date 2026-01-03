@@ -9,6 +9,7 @@ class AuthProvider with ChangeNotifier {
   String? _username;
   String? _name;
   String? _error;
+  String? _commuteTime;
   String? _homeAddress;
   double? _homeLatitude;
   double? _homeLongitude;
@@ -23,6 +24,7 @@ class AuthProvider with ChangeNotifier {
   String? get username => _username;
   String? get name => _name;
   String? get error => _error;
+  String? get commuteTime => _commuteTime;
   String? get homeAddress => _homeAddress;
   double? get homeLatitude => _homeLatitude;
   double? get homeLongitude => _homeLongitude;
@@ -43,6 +45,7 @@ class AuthProvider with ChangeNotifier {
         _userId = response['user_id'];
         _username = response['username'];
         _name = response['name'];
+        _commuteTime = response['commute_time'];
         _homeAddress = response['home_address'];
         _homeLatitude = response['home_latitude'] != null 
             ? double.tryParse(response['home_latitude'].toString()) 
@@ -79,6 +82,7 @@ class AuthProvider with ChangeNotifier {
     _userId = null;
     _username = null;
     _name = null;
+    _commuteTime = null;
     _homeAddress = null;
     _homeLatitude = null;
     _homeLongitude = null;
@@ -126,4 +130,3 @@ class AuthProvider with ChangeNotifier {
     }
   }
 }
-

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 import redis
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 데이터베이스 및 모델 import
 from database import engine, get_db, Base
@@ -612,6 +612,7 @@ class LoginResponse(BaseModel):
     user_id: Optional[int] = None
     username: Optional[str] = None
     name: Optional[str] = None
+    commute_time: Optional[str] = None
     home_address: Optional[str] = None
     home_latitude: Optional[str] = None
     home_longitude: Optional[str] = None
@@ -831,13 +832,16 @@ async def login(
         # 3. 프로필 및 주소 정보 조회
         profile = db.query(UserProfile).filter(UserProfile.id == user.id).first()
         address = db.query(UserAddress).filter(UserAddress.id == user.id).first()
-        
+        commute_time = None
+        if profile and profile.commute_time:
+            commute_time = profile.commute_time.strftime('%H:%M')
         return LoginResponse(
             success=True,
             message="로그인 성공",
             user_id=user.id,
             username=user.user_id,
             name=profile.name if profile else None,
+            commute_time=commute_time,
             home_address=address.home_address if address else None,
             home_latitude=str(address.home_lat) if address and address.home_lat else None,
             home_longitude=str(address.home_lon) if address and address.home_lon else None,
@@ -1083,6 +1087,105 @@ async def health_check():
         return {"status": "unhealthy", "error": str(e)}
 
 
+@app.get("/api/v1/route")
+async def get_route_state(user_id: int):
+    """
+    Redis에 저장된 출근 경로 상태를 조회
+    """
+    key = f"route:state:{user_id}"
+    data = redis_client.get(key)
+
+    if not data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No route data for user_id={user_id}"
+        )
+
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        return {"raw": data}
+
+
+class RouteStateCreateRequest(BaseModel):
+    user_id: int
+    depart_at: str
+    arrive_by: Optional[str] = None
+    total_duration_sec: Optional[int] = None
+    feedback_min: Optional[int] = None
+    route: Optional[dict] = None
+
+
+@app.post("/api/v1/route", response_model=dict)
+async def create_route_state(request: RouteStateCreateRequest):
+    """
+    출근 경로 상태를 Redis에 저장 (테스트/수동 생성용)
+    """
+    try:
+        depart_at = datetime.fromisoformat(request.depart_at)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid depart_at format")
+
+    payload = {
+        "user_id": request.user_id,
+        "depart_at": depart_at.isoformat(),
+        "arrive_by": request.arrive_by,
+        "total_duration_sec": request.total_duration_sec,
+        "feedback_min": request.feedback_min,
+        "route": request.route,
+        "generated_at": datetime.now().isoformat(),
+    }
+
+    key = f"route:state:{request.user_id}"
+    redis_client.set(
+        key,
+        json.dumps(payload),
+        ex=60 * 60,
+    )
+
+    return {"success": True, "key": key}
+
+
+class RouteApprovalRequest(BaseModel):
+    user_id: int
+    depart_at: str
+
+
+@app.post("/api/v1/route/approve", response_model=dict)
+async def approve_route(request: RouteApprovalRequest):
+    """
+    출근 경로 승인 상태를 Redis에 저장
+    """
+    try:
+        depart_at = datetime.fromisoformat(request.depart_at)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid depart_at format")
+
+    key = f"route:approved:{request.user_id}:{depart_at.strftime('%Y%m%d')}"
+    ttl_seconds = int(
+        (
+            depart_at.replace(hour=23, minute=59, second=59, microsecond=0)
+            + timedelta(days=1)
+        ).timestamp()
+        - datetime.now().timestamp()
+    )
+    ttl_seconds = max(ttl_seconds, 3600)
+
+    redis_client.set(
+        key,
+        json.dumps(
+            {
+                "user_id": request.user_id,
+                "depart_at": request.depart_at,
+                "approved_at": datetime.now().isoformat(),
+            }
+        ),
+        ex=ttl_seconds,
+    )
+
+    return {"success": True, "key": key, "ttl_seconds": ttl_seconds}
+
+
 # 공기질(미세먼지) 매칭 엔드포인트
 class AirMatchRequest(BaseModel):
     places: list[str] = []
@@ -1204,4 +1307,3 @@ async def match_air_places(request: AirMatchRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

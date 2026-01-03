@@ -149,4 +149,20 @@ class ApiService {
       rethrow;
     }
   }
+
+  /// 출근 경로 상태 조회
+  Future<Map<String, dynamic>?> getRouteState(int userId) async {
+    return await get('/api/v1/route?user_id=$userId');
+  }
+
+  /// 출근 경로 승인 상태 저장
+  Future<Map<String, dynamic>?> approveRoute({
+    required int userId,
+    required String departAt,
+  }) async {
+    return await post('/api/v1/route/approve', {
+      'user_id': userId,
+      'depart_at': departAt,
+    });
+  }
 }

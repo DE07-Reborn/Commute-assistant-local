@@ -6,8 +6,15 @@ import '../models/recommendation_detail.dart';
 
 class RecommendationTabScreen extends StatefulWidget {
   final bool isCompact;
+  final int? initialTabIndex;
+  final String? highlightMessage;
 
-  const RecommendationTabScreen({super.key, this.isCompact = false});
+  const RecommendationTabScreen({
+    super.key,
+    this.isCompact = false,
+    this.initialTabIndex,
+    this.highlightMessage,
+  });
 
   @override
   State<RecommendationTabScreen> createState() => _RecommendationTabScreenState();
@@ -22,7 +29,12 @@ class _RecommendationTabScreenState extends State<RecommendationTabScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _selectedIndex = widget.initialTabIndex ?? 0;
+    _tabController = TabController(
+      length: 3,
+      vsync: this,
+      initialIndex: _selectedIndex,
+    );
     _tabController.addListener(() {
       setState(() {
         _selectedIndex = _tabController.index;
@@ -85,6 +97,33 @@ class _RecommendationTabScreenState extends State<RecommendationTabScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (widget.highlightMessage != null)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.blue.shade100),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.notifications_active,
+                            color: Colors.blue.shade700),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            widget.highlightMessage!,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.blue.shade900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 // 날씨 정보 요약
                 Card(
                   elevation: 2,
@@ -982,4 +1021,3 @@ class _RecommendationTabScreenState extends State<RecommendationTabScreen>
     }
   }
 }
-

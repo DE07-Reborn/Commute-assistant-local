@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -15,6 +17,7 @@ import 'route_screen.dart';
 import 'recommendation_tab_screen.dart';
 import 'login_screen.dart';
 import 'notification_settings_screen.dart';
+import 'notification_history_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -36,6 +39,12 @@ class _HomeScreenState extends State<HomeScreen> {
   String _currentGreeting = '';
   bool _maskRequired = false;
   String _lastMaskKey = '';
+  Map<String, dynamic>? _routeState;
+  bool _isRouteStateLoading = false;
+  String? _routeStateError;
+  int? _routeStateUserId;
+  DateTime? _lastRouteStateFetch;
+  Timer? _minuteTicker;
 
   @override
   void initState() {
@@ -57,6 +66,12 @@ class _HomeScreenState extends State<HomeScreen> {
     
     // 매 분마다 인삿말 업데이트
     _startGreetingTimer();
+
+    _minuteTicker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
   
   void _startGreetingTimer() {
@@ -78,8 +93,66 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _originController.dispose();
     _destinationController.dispose();
+    _minuteTicker?.cancel();
     super.dispose();
   }
+
+  void _maybeLoadRouteState(AuthProvider authProvider) {
+    if (!authProvider.isLoggedIn || authProvider.userId == null) {
+      return;
+    }
+    if (!_isBeforeCommuteTime(authProvider)) {
+      return;
+    }
+    if (_isRouteStateLoading) {
+      return;
+    }
+    final userId = authProvider.userId!;
+    final now = DateTime.now();
+    if (_routeStateUserId == userId && _lastRouteStateFetch != null) {
+      if (now.difference(_lastRouteStateFetch!) < const Duration(minutes: 1)) {
+        return;
+      }
+    }
+
+    _routeStateUserId = userId;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _loadRouteState(userId);
+    });
+  }
+
+  Future<void> _loadRouteState(int userId) async {
+    if (_isRouteStateLoading) return;
+    setState(() {
+      _isRouteStateLoading = true;
+      _routeStateError = null;
+    });
+
+    try {
+      final apiService = context.read<ApiService>();
+      final data = await apiService.getRouteState(userId);
+      if (!mounted) return;
+      setState(() {
+        _routeState = data;
+        _routeStateError = null;
+        _lastRouteStateFetch = DateTime.now();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _routeState = null;
+        _routeStateError = '경로 정보를 불러올 수 없습니다';
+        _lastRouteStateFetch = DateTime.now();
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isRouteStateLoading = false;
+      });
+    }
+  }
+
 
   Future<void> _updateMaskStateIfNeeded(WeatherProvider weatherProvider, AuthProvider authProvider) async {
     // 준비할 장소 리스트
@@ -226,6 +299,196 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  bool _isBeforeCommuteTime(AuthProvider authProvider) {
+    final commuteTime = authProvider.commuteTime;
+    if (commuteTime == null || commuteTime.isEmpty) {
+      return false;
+    }
+    final parts = commuteTime.split(':');
+    if (parts.length != 2) {
+      return false;
+    }
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) {
+      return false;
+    }
+    final now = DateTime.now();
+    final commuteAt = DateTime(now.year, now.month, now.day, hour, minute);
+    return now.isBefore(commuteAt);
+  }
+
+  String _formatDurationMinutes(int totalSeconds) {
+    final minutes = (totalSeconds / 60).round();
+    if (minutes >= 60) {
+      final hours = minutes ~/ 60;
+      final rem = minutes % 60;
+      return rem == 0 ? '${hours}시간' : '${hours}시간 ${rem}분';
+    }
+    return '${minutes}분';
+  }
+
+  String _formatDistanceKm(num meters) {
+    final km = meters / 1000.0;
+    return km >= 10 ? '${km.toStringAsFixed(0)}km' : '${km.toStringAsFixed(1)}km';
+  }
+
+  String _segmentLabel(Map<String, dynamic> segment) {
+    final type = (segment['type'] ?? '').toString().toLowerCase();
+    if (type == 'walk') {
+      return '도보';
+    }
+    if (type == 'transit') {
+      final transit = segment['transit'];
+      if (transit is Map<String, dynamic>) {
+        final vehicle = (transit['vehicle'] ?? '').toString().toUpperCase();
+        switch (vehicle) {
+          case 'BUS':
+            return '버스';
+          case 'SUBWAY':
+            return '지하철';
+          case 'TRAIN':
+            return '기차';
+        }
+        final line = transit['line']?.toString();
+        if (line != null && line.isNotEmpty) {
+          return line;
+        }
+      }
+      return '대중교통';
+    }
+    if (type == 'drive') {
+      return '자동차';
+    }
+    if (type.isEmpty) {
+      return '이동';
+    }
+    return type;
+  }
+
+  String _buildSegmentSummary(List<dynamic> segments) {
+    final parts = <String>[];
+    for (final segment in segments) {
+      if (segment is! Map<String, dynamic>) continue;
+      final durationSec = segment['duration_sec'];
+      if (durationSec is! int) continue;
+      parts.add('${_segmentLabel(segment)} ${_formatDurationMinutes(durationSec)}');
+    }
+    return parts.take(4).join(' · ');
+  }
+
+  Widget _buildCommuteRecommendationCard(AuthProvider authProvider) {
+    if (!_isBeforeCommuteTime(authProvider)) {
+      return const SizedBox.shrink();
+    }
+
+    if (_isRouteStateLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_routeStateError != null) {
+      return Text(
+        _routeStateError!,
+        style: TextStyle(fontSize: 12, color: Colors.red.shade600),
+      );
+    }
+
+    final route = _routeState?['route'];
+    if (route is! Map<String, dynamic>) {
+      return const SizedBox.shrink();
+    }
+
+    final totalDuration = route['total_duration_sec'] ?? _routeState?['total_duration_sec'];
+    final totalDistance = route['total_distance_m'] ?? _routeState?['total_distance_m'];
+    final segments = route['segments'] is List ? route['segments'] as List : <dynamic>[];
+    final durationText = totalDuration is int ? _formatDurationMinutes(totalDuration) : '시간 정보 없음';
+    final distanceText = totalDistance is num ? _formatDistanceKm(totalDistance) : '거리 정보 없음';
+    final segmentSummary = _buildSegmentSummary(segments);
+    final commuteTime = authProvider.commuteTime ?? '';
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => RouteScreen(
+              initialOrigin: authProvider.homeAddress,
+              initialDestination: authProvider.workAddress,
+            ),
+          ),
+        );
+      },
+      child: Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.route,
+                  color: Colors.blue.shade700,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '출근 $commuteTime 추천 경로',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$durationText · $distanceText',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                    if (segmentSummary.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        segmentSummary,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.arrow_forward_ios,
+                size: 18,
+                color: Colors.grey.shade400,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -266,6 +529,26 @@ class _HomeScreenState extends State<HomeScreen> {
                           return Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              // 알림 기록 버튼
+                              GestureDetector(
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => const NotificationHistoryScreen(),
+                                    ),
+                                  );
+                                },
+                                child: Tooltip(
+                                  message: '알림 기록',
+                                  child: Icon(
+                                    Icons.history,
+                                    size: 20,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
                               // 알림 설정 버튼
                               GestureDetector(
                                 onTap: () {
@@ -353,6 +636,19 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
+              Consumer<AuthProvider>(
+                builder: (context, authProvider, _) {
+                  if (!authProvider.isLoggedIn) {
+                    return const SizedBox.shrink();
+                  }
+                  _maybeLoadRouteState(authProvider);
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _buildCommuteRecommendationCard(authProvider),
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
               // 날씨 정보 카드
               Consumer<WeatherProvider>(
                 builder: (context, weatherProvider, _) {
@@ -603,7 +899,6 @@ class _HomeScreenState extends State<HomeScreen> {
               Consumer<AuthProvider>(
                 builder: (context, authProvider, _) {
                   final isLoggedIn = authProvider.isLoggedIn;
-                  
                   if (!isLoggedIn) {
                     return const SizedBox.shrink();
                   }

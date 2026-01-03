@@ -10,7 +10,7 @@ class GoogleAPIUtils:
     BASE_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
     def __init__(self):
-        self.api_key = os.getenv("GOOGLE_API_KEY")
+        self.api_key = os.getenv("GOOGLE_MAPS_API_KEY")
 
     def request_route_api(self, lon1, lat1, lon2, lat2, arrival_time):
         """
@@ -51,7 +51,13 @@ class GoogleAPIUtils:
         }
 
         try:
-            response = requests.post(self.BASE_URL, headers=headers, json=data, timeout = 10)
+            response = requests.post(self.BASE_URL, headers=headers, json=data, timeout=10)
+            if response.status_code != 200:
+                logging.error(
+                    "Routes API error: status=%s body=%s",
+                    response.status_code,
+                    response.text,
+                )
             response.raise_for_status()
             return response.json()
         
