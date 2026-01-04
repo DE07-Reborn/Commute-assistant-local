@@ -88,11 +88,12 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      final departAt = DateTime.tryParse(departAtRaw);
-      if (departAt == null) {
+      final parsed = DateTime.tryParse(departAtRaw);
+      if (parsed == null) {
         print('[Notification] depart_at parse failed: $departAtRaw');
         return;
       }
+      final departAt = parsed.isUtc ? parsed.toLocal() : parsed;
 
       print('[Notification] routeState depart_at=$departAt');
       await notificationService.scheduleCommuteNotifications(

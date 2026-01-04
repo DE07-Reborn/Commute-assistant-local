@@ -138,10 +138,8 @@ class _RouteScreenState extends State<RouteScreen> {
         departAt: departAtRaw,
       );
 
-      _departAt = DateTime.tryParse(departAtRaw);
-      _arriveBy = arriveByRaw != null && arriveByRaw.isNotEmpty
-          ? DateTime.tryParse(arriveByRaw)
-          : null;
+      _departAt = _parseServerTime(departAtRaw);
+      _arriveBy = _parseServerTime(arriveByRaw);
       _startCountdown();
 
       if (!mounted) return;
@@ -168,6 +166,13 @@ class _RouteScreenState extends State<RouteScreen> {
 
   void _startDepartCountdown() {
     _startCountdown();
+  }
+
+  DateTime? _parseServerTime(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return null;
+    return parsed.isUtc ? parsed.toLocal() : parsed;
   }
 
   void _startCountdown() {
