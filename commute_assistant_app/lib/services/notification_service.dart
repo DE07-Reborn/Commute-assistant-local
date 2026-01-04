@@ -136,6 +136,11 @@ class NotificationService {
     print('[Notification] schedule done');
   }
 
+  Future<void> cancelAllNotifications() async {
+    await _plugin.cancelAll();
+    print('[Notification] canceled all');
+  }
+
   Future<void> _scheduleNotification({
     required int id,
     required String type,
