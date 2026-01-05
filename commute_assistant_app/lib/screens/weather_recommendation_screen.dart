@@ -72,7 +72,7 @@ class WeatherRecommendationScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          weather.description,
+                          weather.description.toString(),
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                         const SizedBox(height: 16),

@@ -2,6 +2,11 @@
 
 구글 맵스 API를 활용한 대중교통 경로 안내 및 날씨 기반 추천 서비스를 제공하는 Flutter 앱입니다.
 
+# 아이콘 적용 명령어
+
+flutter pub get
+dart run flutter_launcher_icons:main
+
 ## 주요 기능
 
 ### 1. 경로 안내
