@@ -75,7 +75,7 @@ class WeatherService {
       final condition = _mapWeatherCategoryToCondition(wc);
       
       // description 설정
-      final description = wc;
+      final description = data['ws'] ?? -99;
 
       return WeatherInfo(
         temperature: ta,
@@ -84,7 +84,6 @@ class WeatherService {
         windSpeed: ws,
         description: description,
         location: data['location']?.toString(),
-        uvIndex: data['uvIndex']?.toString(),
         weatherCategory: wc,
       );
     } catch (e) {
