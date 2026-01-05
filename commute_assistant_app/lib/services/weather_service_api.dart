@@ -77,9 +77,8 @@ class WeatherServiceApi {
         condition: data['condition'] as String,
         humidity: data['humidity'] as int,
         windSpeed: (data['windSpeed'] as num).toDouble(),
-        description: data['description'] as String,
+        description: data['description'] as int,
         location: data['location'] as String?,
-        uvIndex: data['uvIndex'] as String?,
         weatherCategory: data['weatherCategory'] as String?,
       );
     } catch (e) {
