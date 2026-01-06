@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:io' show Platform;
 import '../services/api_service.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
@@ -51,15 +52,17 @@ class AuthProvider with ChangeNotifier {
       _workLongitude = 126.9780;
       _error = null;
       notifyListeners();
-      final token = await FirebaseMessaging.instance.getToken();
-      if (token != null && _userId != null) {
-        await apiService.saveFcmToken(_userId!, token);
-      }
-      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
-        if (_userId != null) {
-          apiService.saveFcmToken(_userId!, newToken);
+      if (!kIsWeb && !Platform.isIOS) {
+        final token = await FirebaseMessaging.instance.getToken();
+        if (token != null && _userId != null) {
+          await apiService.saveFcmToken(_userId!, token);
         }
-      });
+        FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+          if (_userId != null) {
+            apiService.saveFcmToken(_userId!, newToken);
+          }
+        });
+      }
       return true;
     }
     
@@ -73,16 +76,18 @@ class AuthProvider with ChangeNotifier {
         _isLoggedIn = true;
         _userId = response['user_id'];
 
-        final token = await FirebaseMessaging.instance.getToken();
-        if (token != null && _userId != null) {
-          await apiService.saveFcmToken(_userId!, token);
-        }
-
-        FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
-          if (_userId != null) {
-            apiService.saveFcmToken(_userId!, newToken);
+        if (!kIsWeb && !Platform.isIOS) {
+          final token = await FirebaseMessaging.instance.getToken();
+          if (token != null && _userId != null) {
+            await apiService.saveFcmToken(_userId!, token);
           }
-        });
+
+          FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+            if (_userId != null) {
+              apiService.saveFcmToken(_userId!, newToken);
+            }
+          });
+        }
 
         _username = response['username'];
         _name = response['name'];

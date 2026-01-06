@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/weather_provider.dart';
@@ -74,6 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final apiService = context.read<ApiService>();
     final notificationService = context.read<NotificationService>();
+    final isIOS = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
     try {
       print('[Notification] fetching route state userId=$userId');
@@ -97,18 +99,17 @@ class _LoginScreenState extends State<LoginScreen> {
       final departAt = parsed.isUtc ? parsed.toLocal() : parsed;
 
       print('[Notification] routeState depart_at=$departAt');
-      // Trigger FCM scheduling via route update (test_mode=true).
-      await apiService.saveRouteState(
-        userId: userId,
-        departAt: departAt.toIso8601String(),
-        testMode: kNotificationTestMode,
-      );
-      // Local notifications disabled while using FCM.
-      // await notificationService.scheduleCommuteNotifications(
-      //   departAt: departAt,
-      // );
-      // await notificationService.showTestNotification();
-      // await notificationService.showAfterDelay();
+      if (isIOS) {
+        await notificationService.scheduleCommuteNotifications(
+          departAt: departAt,
+        );
+      } else {
+        await apiService.saveRouteState(
+          userId: userId,
+          departAt: departAt.toIso8601String(),
+          testMode: kNotificationTestMode,
+        );
+      }
     } catch (e) {
       print('[Notification] schedule error: $e');
     }

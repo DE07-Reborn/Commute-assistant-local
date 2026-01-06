@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -165,6 +166,13 @@ class _HomeScreenState extends State<HomeScreen> {
     if (parsed == null) return;
     final departAt = parsed.isUtc ? parsed.toLocal() : parsed;
     _lastScheduledDepartAt = departAtRaw;
+    final isIOS = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+    if (isIOS) {
+      final notificationService = context.read<NotificationService>();
+      await notificationService.scheduleCommuteNotifications(departAt: departAt);
+      return;
+    }
+
     final apiService = context.read<ApiService>();
     final authProvider = context.read<AuthProvider>();
     final userId = authProvider.userId;
@@ -180,9 +188,6 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       print('[Notification] route schedule post failed: $e');
     }
-    // Local notifications disabled while using FCM.
-    // final notificationService = context.read<NotificationService>();
-    // await notificationService.scheduleCommuteNotifications(departAt: departAt);
   }
 
   Future<void> _searchRoute() async {

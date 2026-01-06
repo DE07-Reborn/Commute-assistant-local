@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'dart:io' show Platform;
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -80,7 +81,7 @@ Future<void> _showLocalNotificationFromData(Map<String, dynamic> data) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (!kIsWeb) {
+  if (!kIsWeb && !Platform.isIOS) {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   }
@@ -109,22 +110,24 @@ class _MyAppState extends State<MyApp> {
       testMode: kNotificationTestMode,
     );
     _notificationService.initialize();
-    FirebaseMessaging.onMessage.listen((message) {
-      final data = message.data;
-      final type = data['type']?.toString() ?? '';
-      final title = data['title']?.toString() ?? 'Notification';
-      final body = data['body']?.toString() ?? '';
-      _notificationService.showForegroundNotification(
-        type: type,
-        title: title,
-        body: body,
-      );
-    });
-    FirebaseMessaging.onMessageOpenedApp.listen((message) {
-      final type = message.data['type']?.toString();
-      _notificationService.recordHistoryFromType(type);
-    });
-    _handleInitialFcmMessage();
+    if (!kIsWeb && !Platform.isIOS) {
+      FirebaseMessaging.onMessage.listen((message) {
+        final data = message.data;
+        final type = data['type']?.toString() ?? '';
+        final title = data['title']?.toString() ?? 'Notification';
+        final body = data['body']?.toString() ?? '';
+        _notificationService.showForegroundNotification(
+          type: type,
+          title: title,
+          body: body,
+        );
+      });
+      FirebaseMessaging.onMessageOpenedApp.listen((message) {
+        final type = message.data['type']?.toString();
+        _notificationService.recordHistoryFromType(type);
+      });
+      _handleInitialFcmMessage();
+    }
     // FastAPI에서 Google Maps API 키 로드
     _apiKeyFuture = _fetchGoogleMapsApiKey();
   }
