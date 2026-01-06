@@ -254,11 +254,11 @@ class RedisService:
         # 날씨 카테고리에서 condition 추출
         weather_category = data.get('weather_category', '') or ''
         if '-' in weather_category:
-            wc = weather_category.split('-')[-1]
+            weather_category_split = weather_category.split('-')[-1]
         else:
-            wc = weather_category
+            weather_category_split = weather_category
         
-        condition = self._map_weather_condition(wc)
+        condition = self._map_weather_condition(weather_category_split)
         
         # 문자열을 숫자로 변환 (기존 Flutter 코드와 동일)
         def parse_double(value):
@@ -282,10 +282,10 @@ class RedisService:
             'condition': condition,
             'humidity': hm,
             'windSpeed': ws,
-            'description': wc,
+            'description': data.get('wc', -99),
             'location': data.get('location', '서울시 강남구'),
             'uvIndex': data.get('uvIndex'),
-            'weatherCategory': wc
+            'weatherCategory': weather_category
         }
     
     def parse_book_data(self, data: dict) -> Optional[dict]:

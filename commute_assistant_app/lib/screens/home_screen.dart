@@ -728,7 +728,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           ),
                                         ),
                                         Text(
-                                          weather.description.toString(),
+                                          weather.condition,
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontSize: 16,
