@@ -725,7 +725,7 @@ class _RecommendationTabScreenState extends State<RecommendationTabScreen>
           ),
         );
       }).toList(),
-    );s
+    );
   }
 
   List<RecommendationDetail> _getClothingRecommendations(String condition) {
