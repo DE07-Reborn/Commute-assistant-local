@@ -179,12 +179,33 @@ class ApiService {
     }
   }
 
+  Future<void> saveFcmToken(int userId, String token) async {
+    await post('/api/v1/fcm/token', {
+      'user_id': userId,
+      'token': token,
+      'platform': 'android',
+    });
+  }
+
   /// 출근 경로 상태 조회
   Future<Map<String, dynamic>?> getRouteState(int userId) async {
     return await get('/api/v1/route?user_id=$userId');
   }
 
   /// 출근 경로 승인 상태 저장
+  /// 출근 경로 상태 저장 (FCM 알림용)
+  Future<Map<String, dynamic>?> saveRouteState({
+    required int userId,
+    required String departAt,
+    bool testMode = false,
+  }) async {
+    return await post('/api/v1/route', {
+      'user_id': userId,
+      'depart_at': departAt,
+      'test_mode': testMode,
+    });
+  }
+
   Future<Map<String, dynamic>?> approveRoute({
     required int userId,
     required String departAt,

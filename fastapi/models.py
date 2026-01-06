@@ -76,3 +76,14 @@ class Event(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = relationship("User", back_populates="events")
+
+
+class FcmToken(Base):
+    __tablename__ = "fcm_tokens"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    token = Column(String, unique=True, nullable=False, index=True)
+    platform = Column(String, default="android")
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    active = Column(Boolean, default=True, server_default="true")

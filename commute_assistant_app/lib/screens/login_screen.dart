@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/weather_provider.dart';
 import '../services/api_service.dart';
+import '../main.dart';
 import '../services/notification_service.dart';
 import 'signup_screen.dart';
 
@@ -96,9 +97,18 @@ class _LoginScreenState extends State<LoginScreen> {
       final departAt = parsed.isUtc ? parsed.toLocal() : parsed;
 
       print('[Notification] routeState depart_at=$departAt');
-      await notificationService.scheduleCommuteNotifications(
-        departAt: departAt,
+      // Trigger FCM scheduling via route update (test_mode=true).
+      await apiService.saveRouteState(
+        userId: userId,
+        departAt: departAt.toIso8601String(),
+        testMode: kNotificationTestMode,
       );
+      // Local notifications disabled while using FCM.
+      // await notificationService.scheduleCommuteNotifications(
+      //   departAt: departAt,
+      // );
+      // await notificationService.showTestNotification();
+      // await notificationService.showAfterDelay();
     } catch (e) {
       print('[Notification] schedule error: $e');
     }

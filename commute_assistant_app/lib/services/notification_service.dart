@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/services.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -24,6 +25,89 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
   final GlobalKey<NavigatorState> _navigatorKey;
   final bool testMode;
+  final MethodChannel _exactAlarmChannel =
+      const MethodChannel('commute_assistant/exact_alarm');
+  bool? _canScheduleExactAlarms;
+
+  Future<void> showTestNotification() async {
+    await _plugin.show(
+      9999,
+      '로그인 테스트 알림',
+      '로그인 직후 즉시 표시 테스트',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'commute_notifications',
+          'Commute Notifications',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+      ),
+    );
+  }
+
+  Future<void> showAfterDelay() async {
+    await Future.delayed(const Duration(seconds: 10));
+    await _plugin.show(
+      9998,
+      'Delayed test notification',
+      '10 seconds after login',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'commute_notifications',
+          'Commute Notifications',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+      ),
+    );
+  }
+
+  Future<void> showForegroundNotification({
+    required String type,
+    required String title,
+    required String body,
+  }) async {
+    final id = DateTime.now().millisecondsSinceEpoch % 2147483647;
+    final payload = json.encode({'type': type});
+    final withApprovalAction = type == 'route';
+    final androidDetails = AndroidNotificationDetails(
+      'commute_notifications',
+      'Commute Notifications',
+      importance: Importance.max,
+      priority: Priority.high,
+      actions: withApprovalAction
+          ? [
+              const AndroidNotificationAction(
+                'approve_route',
+                '경로 승인',
+                showsUserInterface: true,
+              ),
+            ]
+          : null,
+    );
+    final iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentSound: true,
+      categoryIdentifier: withApprovalAction ? 'route_approval' : null,
+    );
+    await _plugin.show(
+      id,
+      title,
+      body,
+      NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      ),
+      payload: payload,
+    );
+  }
+
+  void recordHistoryFromType(String? type) {
+    if (type == null || type.isEmpty) {
+      return;
+    }
+    _recordHistory(type);
+  }
 
   Future<void> initialize() async {
     tz.initializeTimeZones();
@@ -70,11 +154,36 @@ class NotificationService {
     await android?.requestNotificationsPermission();
   }
 
+  Future<void> _refreshExactAlarmPermission() async {
+    try {
+      final result =
+          await _exactAlarmChannel.invokeMethod<bool>('canScheduleExactAlarms');
+      _canScheduleExactAlarms = result ?? false;
+    } catch (e) {
+      _canScheduleExactAlarms = false;
+      print('[Notification] exact alarm check failed: $e');
+    }
+    print('[Notification] canScheduleExactAlarms=$_canScheduleExactAlarms');
+  }
+
+  Future<void> _requestExactAlarmPermission() async {
+    try {
+      await _exactAlarmChannel.invokeMethod('requestExactAlarmPermission');
+    } catch (e) {
+      print('[Notification] exact alarm request failed: $e');
+    }
+  }
+
+
   Future<void> scheduleCommuteNotifications({
     required DateTime departAt,
   }) async {
     print('[Notification] schedule start departAt=$departAt testMode=$testMode');
-    await _plugin.cancelAll();
+    // await _plugin.cancelAll();
+    await _refreshExactAlarmPermission();
+    if (_canScheduleExactAlarms == false) {
+      await _requestExactAlarmPermission();
+    }
     final settings = await _loadEventSettings();
 
     final DateTime baseTime = testMode
@@ -194,6 +303,7 @@ class NotificationService {
   }) async {
     final now = tz.TZDateTime.now(tz.local);
     final target = tz.TZDateTime.from(scheduledAt, tz.local);
+    print('[Notification] now=$now target=$target diff=${target.difference(now)}');
     if (target.isBefore(now)) {
       print('[Notification] skip id=$id type=$type target=$target now=$now');
       return;
@@ -208,6 +318,8 @@ class NotificationService {
       channelDescription: '출퇴근 알림',
       importance: Importance.max,
       priority: Priority.high,
+      ongoing: true,         // 알림창에 계속 남김
+      autoCancel: false,     // 탭해도 자동 삭제 안 됨
       actions: withApprovalAction
           ? [
               const AndroidNotificationAction(
@@ -235,11 +347,19 @@ class NotificationService {
       target,
       notificationDetails,
       payload: payload,
-      androidAllowWhileIdle: true,
       uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
+        UILocalNotificationDateInterpretation.absoluteTime,
+      androidScheduleMode: (_canScheduleExactAlarms ?? false)
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
     );
     print('[Notification] scheduled id=$id type=$type');
+
+    final pending = await _plugin.pendingNotificationRequests();
+    print('[Notification] pending count=${pending.length}');
+    for (final p in pending) {
+      print('[Notification] pending id=${p.id} title=${p.title}');
+    }
   }
 
   Future<void> _handleNotificationResponse(NotificationResponse response) async {

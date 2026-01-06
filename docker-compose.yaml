@@ -272,9 +272,12 @@ services:
       POSTGRES_HOST: ${APP_DB_HOST}
       POSTGRES_PORT: ${APP_DB_PORT}
       AIR_STATIONS_CSV: /app/dataset/air_stations.csv
+      FCM_SERVICE_ACCOUNT_JSON: /app/secrets/fcm-service-account.json
+      FCM_PROJECT_ID: commute-assistant-f2a53
     volumes:
       - ./fastapi:/app
       - ./dataset:/app/dataset
+      - ./secrets/fcm-service-account.json:/app/secrets/fcm-service-account.json:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

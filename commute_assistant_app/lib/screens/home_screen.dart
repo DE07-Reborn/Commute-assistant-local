@@ -11,6 +11,7 @@ import '../providers/recent_search_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
+import '../main.dart';
 import '../models/saved_location.dart';
 import '../models/recent_search.dart';
 import '../widgets/address_autocomplete_field.dart';
@@ -31,7 +32,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _originController = TextEditingController();
   final TextEditingController _destinationController = TextEditingController();
-  final LocationService _locationService = LocationService();
   bool _isDateFormatInitialized = false;
   String? _originAddress;
   String? _destinationAddress;
@@ -40,10 +40,6 @@ class _HomeScreenState extends State<HomeScreen> {
   double? _destLat;
   double? _destLng;
   String _currentGreeting = '';
-  bool _maskRequired = false;
-  String _lastMaskKey = '';
-  bool _umbrellaRequired = false;
-  String _lastUmbrellaKey = '';
   Map<String, dynamic>? _routeState;
   bool _isRouteStateLoading = false;
   String? _routeStateError;
@@ -169,119 +165,24 @@ class _HomeScreenState extends State<HomeScreen> {
     if (parsed == null) return;
     final departAt = parsed.isUtc ? parsed.toLocal() : parsed;
     _lastScheduledDepartAt = departAtRaw;
-    final notificationService = context.read<NotificationService>();
-    await notificationService.scheduleCommuteNotifications(departAt: departAt);
-  }
-
-
-  Future<void> _updateMaskStateIfNeeded(WeatherProvider weatherProvider, AuthProvider authProvider) async {
-    final coordinates = <Map<String, double>>[];
-
+    final apiService = context.read<ApiService>();
+    final authProvider = context.read<AuthProvider>();
+    final userId = authProvider.userId;
+    if (userId == null) {
+      return;
+    }
     try {
-      final currentPosition = await _locationService.getCurrentPosition();
-      if (currentPosition != null) {
-        coordinates.add({
-          'latitude': currentPosition.latitude,
-          'longitude': currentPosition.longitude,
-        });
-      }
+      await apiService.saveRouteState(
+        userId: userId,
+        departAt: departAt.toIso8601String(),
+        testMode: kNotificationTestMode,
+      );
     } catch (e) {
-      print('현재 위치 조회 오류: $e');
+      print('[Notification] route schedule post failed: $e');
     }
-
-    if (authProvider.homeLatitude != null && authProvider.homeLongitude != null) {
-      coordinates.add({
-        'latitude': authProvider.homeLatitude!,
-        'longitude': authProvider.homeLongitude!,
-      });
-    }
-
-    if (authProvider.workLatitude != null && authProvider.workLongitude != null) {
-      coordinates.add({
-        'latitude': authProvider.workLatitude!,
-        'longitude': authProvider.workLongitude!,
-      });
-    }
-
-    if (coordinates.isEmpty) {
-      coordinates.add({
-        'latitude': 37.5172,
-        'longitude': 127.0473,
-      });
-    }
-
-    final key = coordinates
-        .map((c) => '${c['latitude']},${c['longitude']}')
-        .join('|');
-    if (key == _lastMaskKey) return;
-    _lastMaskKey = key;
-
-    try {
-      final api = Provider.of<ApiService>(context, listen: false);
-      final resp = await api.postAirMatch(coordinates);
-      final mask = resp != null && resp['mask_required'] == true;
-      if (mounted) {
-        setState(() {
-          _maskRequired = mask;
-        });
-      }
-    } catch (e) {
-      print('마스크 상태 조회 오류: $e');
-    }
-  }
-
-  Future<void> _updateUmbrellaStateIfNeeded(AuthProvider authProvider) async {
-    final coordinates = <Map<String, dynamic>>[];
-
-    try {
-      final currentPosition = await _locationService.getCurrentPosition();
-      if (currentPosition != null) {
-        coordinates.add({
-          'latitude': currentPosition.latitude,
-          'longitude': currentPosition.longitude,
-          'kind': 'current',
-        });
-      }
-    } catch (e) {
-      print('현재 위치 조회 오류: $e');
-    }
-
-    if (authProvider.homeLatitude != null && authProvider.homeLongitude != null) {
-      coordinates.add({
-        'latitude': authProvider.homeLatitude!,
-        'longitude': authProvider.homeLongitude!,
-        'kind': 'home',
-      });
-    }
-
-    if (authProvider.workLatitude != null && authProvider.workLongitude != null) {
-      coordinates.add({
-        'latitude': authProvider.workLatitude!,
-        'longitude': authProvider.workLongitude!,
-        'kind': 'work',
-      });
-    }
-
-    if (coordinates.isEmpty) {
-      coordinates.add({'latitude': 37.5172, 'longitude': 127.0473, 'kind': 'current',});
-    }
-
-    final key = coordinates.map((c) => '${c['latitude']},${c['longitude']}').join('|');
-    if (key == _lastUmbrellaKey) return;
-    _lastUmbrellaKey = key;
-
-    try {
-      final api = Provider.of<ApiService>(context, listen: false);
-      final resp = await api.postUmbrellaMatch(authProvider.userId, coordinates);
-      final umbrella = resp != null && resp['umbrella_required'] == true;
-      if (mounted) {
-        setState(() {
-          _umbrellaRequired = umbrella;
-        });
-      }
-    } catch (e) {
-      print('우산 상태 조회 오류: $e');
-    }
+    // Local notifications disabled while using FCM.
+    // final notificationService = context.read<NotificationService>();
+    // await notificationService.scheduleCommuteNotifications(departAt: departAt);
   }
 
   Future<void> _searchRoute() async {
@@ -754,10 +655,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   }
 
                   // 마스크 상태 업데이트 (비동기 호출)
+                  final maskRequired = weatherProvider.maskRequired;
+                  final umbrellaRequired = weatherProvider.umbrellaRequired;
+
                   WidgetsBinding.instance.addPostFrameCallback((_) {
-                    final authProvider = context.read<AuthProvider>();
-                    _updateMaskStateIfNeeded(weatherProvider, authProvider);
-                    _updateUmbrellaStateIfNeeded(authProvider);
+                    context.read<WeatherProvider>().refreshMaskUmbrella();
                   });
 
                   return Padding(
@@ -840,7 +742,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Opacity(
-                                      opacity: _umbrellaRequired ? 1.0 : 0.35,
+                                      opacity: umbrellaRequired ? 1.0 : 0.35,
                                       child: Image.asset(
                                         'assets/images/umbrella.png',
                                         width: 40,
@@ -851,7 +753,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Opacity(
-                                      opacity: _maskRequired ? 1.0 : 0.35,
+                                      opacity: maskRequired ? 1.0 : 0.35,
                                       child: Image.asset(
                                         'assets/images/mask.png',
                                         width: 40,

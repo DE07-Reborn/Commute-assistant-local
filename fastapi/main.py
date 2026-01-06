@@ -18,10 +18,14 @@ import csv
 from pathlib import Path
 from typing import Literal
 from pythermalcomfort.utilities import clo_individual_garments
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request
+import requests
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # 데이터베이스 및 모델 import
 from database import engine, get_db, Base
-from models import User, UserProfile, UserAddress, Event, Gender
+from models import User, UserProfile, UserAddress, Event, Gender, FcmToken
 from auth import hash_password, verify_password
 from address_service import AddressService
 
@@ -197,6 +201,10 @@ class UnifiedDataResponse(BaseModel):
     clothing: list[ClothingItem] = []   # 추가
     apparent_temp: Optional[float] = None  # 선택
 
+class FcmTokenRequest(BaseModel):
+    user_id: int
+    token: str
+    platform: Optional[str] = "android"
 
 # Redis 서비스
 class RedisService:
@@ -1207,10 +1215,11 @@ class RouteStateCreateRequest(BaseModel):
     total_duration_sec: Optional[int] = None
     feedback_min: Optional[int] = None
     route: Optional[dict] = None
+    test_mode: Optional[bool] = False
 
 
 @app.post("/api/v1/route", response_model=dict)
-async def create_route_state(request: RouteStateCreateRequest):
+async def create_route_state(request: RouteStateCreateRequest, db: Session = Depends(get_db)):
     """
     출근 경로 상태를 Redis에 저장 (테스트/수동 생성용)
     """
@@ -1218,6 +1227,8 @@ async def create_route_state(request: RouteStateCreateRequest):
         depart_at = datetime.fromisoformat(request.depart_at)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid depart_at format")
+
+    schedule_fcm_notifications(request.user_id, depart_at, db, test_mode=bool(request.test_mode))
 
     payload = {
         "user_id": request.user_id,
@@ -1642,6 +1653,125 @@ def recommend_outfit(t, rh, wind):
         "items_en": items,
         "items_ko": to_korean(items),
     }
+
+def get_fcm_access_token():
+    credentials = service_account.Credentials.from_service_account_file(
+        os.getenv("FCM_SERVICE_ACCOUNT_JSON"),
+        scopes=["https://www.googleapis.com/auth/firebase.messaging"]
+    )
+    credentials.refresh(Request())
+    return credentials.token
+
+def send_fcm_message(token: str, title: str, body: str, msg_type: str):
+    project_id = os.getenv("FCM_PROJECT_ID")
+    access_token = get_fcm_access_token()
+
+    url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "message": {
+            "token": token,
+            "data": {
+                "type": msg_type,
+                "title": title,
+                "body": body
+            },
+            "android": {
+                "priority": "HIGH"
+            },
+            "apns": {
+                "headers": {
+                    "apns-priority": "10"
+                },
+                "payload": {
+                    "aps": {
+                        "content-available": 1
+                    }
+                }
+            }
+        }
+    }
+    requests.post(url, headers=headers, json=payload)
+
+_fcm_tables_ready = False
+
+
+def _ensure_fcm_tables():
+    global _fcm_tables_ready
+    if _fcm_tables_ready:
+        return
+    Base.metadata.create_all(bind=engine)
+    _fcm_tables_ready = True
+
+
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+def schedule_fcm_notifications(user_id: int, depart_at: datetime, db: Session, test_mode: bool = False):
+    # 토큰 조회
+    tokens = db.query(FcmToken).filter(FcmToken.user_id == user_id, FcmToken.active == True).all()
+    if not tokens:
+        return
+
+    if test_mode:
+        base = datetime.now() + timedelta(seconds=40)
+        schedule = [
+            ("route", "추천 경로가 준비됐어요", "경로를 확인하고 승인해주세요.", base - timedelta(seconds=30)),
+            ("weather", "날씨/옷 추천", "출발 전에 오늘 옷차림을 확인하세요.", base - timedelta(seconds=15)),
+            ("mask", "마스크/우산 체크", "마스크 또는 우산이 필요할 수 있어요.", base - timedelta(seconds=5)),
+            ("depart", "출발 시간이에요", "추천 경로로 출발하세요.", base),
+            ("music", "음악/도서 추천", "이동 중 즐길 콘텐츠를 확인하세요.", base + timedelta(seconds=10)),
+        ]
+    else:
+        schedule = [
+            ("route", "추천 경로가 준비됐어요", "경로를 확인하고 승인해주세요.", depart_at - timedelta(minutes=30)),
+            ("weather", "날씨/옷 추천", "출발 전에 오늘 옷차림을 확인하세요.", depart_at - timedelta(minutes=15)),
+            ("mask", "마스크/우산 체크", "마스크 또는 우산이 필요할 수 있어요.", depart_at - timedelta(minutes=5)),
+            ("depart", "출발 시간이에요", "추천 경로로 출발하세요.", depart_at),
+            ("music", "음악/도서 추천", "이동 중 즐길 콘텐츠를 확인하세요.", depart_at + timedelta(minutes=10)),
+        ]
+
+    now = datetime.now()
+    for msg_type, title, body, when in schedule:
+        if when <= now:
+            continue
+        for t in tokens:
+            job_id = f"fcm:{user_id}:{msg_type}:{t.token}"
+            try:
+                scheduler.remove_job(job_id)
+            except Exception:
+                pass
+            scheduler.add_job(
+                send_fcm_message,
+                'date',
+                id=job_id,
+                replace_existing=True,
+                run_date=when,
+                args=[t.token, title, body, msg_type],
+            )
+
+@app.post("/api/v1/fcm/token")
+def save_fcm_token(req: FcmTokenRequest, db: Session = Depends(get_db)):
+    _ensure_fcm_tables()
+    # 이미 있으면 갱신
+    token = db.query(FcmToken).filter(FcmToken.token == req.token).first()
+    if token:
+        token.user_id = req.user_id
+        token.platform = req.platform
+        token.active = True
+    else:
+        token = FcmToken(
+            user_id=req.user_id,
+            token=req.token,
+            platform=req.platform,
+            active=True
+        )
+        db.add(token)
+    db.commit()
+    return {"success": True}
 
 if __name__ == "__main__":
     import uvicorn

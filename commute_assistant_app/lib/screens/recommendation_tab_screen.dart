@@ -59,6 +59,8 @@ class _RecommendationTabScreenState extends State<RecommendationTabScreen>
       builder: (context, weatherProvider, _) {
         final recommendation = weatherProvider.recommendation;
         final weather = weatherProvider.weatherInfo;
+        final maskRequired = context.watch<WeatherProvider>().maskRequired;
+        final umbrellaRequired = context.watch<WeatherProvider>().umbrellaRequired;
 
         if (recommendation == null || weather == null) {
           if (widget.isCompact) {
@@ -79,6 +81,10 @@ class _RecommendationTabScreenState extends State<RecommendationTabScreen>
         if (widget.isCompact) {
           return _buildCompactView(recommendation, weather);
         }
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          context.read<WeatherProvider>().refreshMaskUmbrella();
+        });
 
         // 전체 화면 버전
         return Scaffold(
@@ -153,26 +159,55 @@ class _RecommendationTabScreenState extends State<RecommendationTabScreen>
                         ),
                         const SizedBox(width: 16),
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${weather.temperature == 0 ? '0' : weather.temperature.toStringAsFixed(0)}°C',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${weather.temperature == 0 ? '0' : weather.temperature.toStringAsFixed(0)}°C',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
-                              ),
-                              Text(
-                                weather.description.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 14,
+                                Text(
+                                  weather.description.toString(),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Opacity(
+                              opacity: umbrellaRequired ? 1.0 : 0.35,
+                              child: Image.asset(
+                                'assets/images/umbrella.png',
+                                width: 30,
+                                height: 30,
+                                color: Colors.white,
+                                colorBlendMode: BlendMode.modulate,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Opacity(
+                              opacity: maskRequired ? 1.0 : 0.35,
+                              child: Image.asset(
+                                'assets/images/mask.png',
+                                width: 30,
+                                height: 30,
+                                color: Colors.white,
+                                colorBlendMode: BlendMode.modulate,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),

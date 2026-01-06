@@ -18,8 +18,72 @@ import 'services/places_service.dart';
 import 'services/api_service.dart';
 import 'services/location_service.dart';
 import 'services/notification_service.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-void main() {
+
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  await _showLocalNotificationFromData(message.data);
+}
+
+Future<void> _showLocalNotificationFromData(Map<String, dynamic> data) async {
+  final plugin = FlutterLocalNotificationsPlugin();
+  const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const iosSettings = DarwinInitializationSettings();
+  const initSettings = InitializationSettings(
+    android: androidSettings,
+    iOS: iosSettings,
+  );
+  await plugin.initialize(initSettings);
+
+  final type = data['type']?.toString() ?? '';
+  final title = data['title']?.toString() ?? 'Notification';
+  final body = data['body']?.toString() ?? '';
+  final withApprovalAction = type == 'route';
+  final androidDetails = AndroidNotificationDetails(
+    'commute_notifications',
+    'Commute Notifications',
+    importance: Importance.max,
+    priority: Priority.high,
+    actions: withApprovalAction
+        ? [
+            const AndroidNotificationAction(
+              'approve_route',
+              '경로 승인',
+              showsUserInterface: true,
+            ),
+          ]
+        : null,
+  );
+  final iosDetails = DarwinNotificationDetails(
+    presentAlert: true,
+    presentSound: true,
+    categoryIdentifier: withApprovalAction ? 'route_approval' : null,
+  );
+  final payload = json.encode({'type': type});
+  final id = DateTime.now().millisecondsSinceEpoch % 2147483647;
+
+  await plugin.show(
+    id,
+    title,
+    body,
+    NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    ),
+    payload: payload,
+  );
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (!kIsWeb) {
+    await Firebase.initializeApp();
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  }
   runApp(const MyApp());
 }
 
@@ -45,6 +109,22 @@ class _MyAppState extends State<MyApp> {
       testMode: kNotificationTestMode,
     );
     _notificationService.initialize();
+    FirebaseMessaging.onMessage.listen((message) {
+      final data = message.data;
+      final type = data['type']?.toString() ?? '';
+      final title = data['title']?.toString() ?? 'Notification';
+      final body = data['body']?.toString() ?? '';
+      _notificationService.showForegroundNotification(
+        type: type,
+        title: title,
+        body: body,
+      );
+    });
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      final type = message.data['type']?.toString();
+      _notificationService.recordHistoryFromType(type);
+    });
+    _handleInitialFcmMessage();
     // FastAPI에서 Google Maps API 키 로드
     _apiKeyFuture = _fetchGoogleMapsApiKey();
   }
@@ -60,6 +140,15 @@ class _MyAppState extends State<MyApp> {
   
   static const String _fallbackGoogleMapsApiKey =
       'AIzaSyD0R-e5sVfzsjbpq1g_hY4eS452dZ4ZL78';
+
+  Future<void> _handleInitialFcmMessage() async {
+    final message = await FirebaseMessaging.instance.getInitialMessage();
+    if (message == null) {
+      return;
+    }
+    final type = message.data['type']?.toString();
+    _notificationService.recordHistoryFromType(type);
+  }
 
   Future<String> _fetchGoogleMapsApiKey() async {
     final String apiBaseUrl = _getApiBaseUrl();
@@ -169,6 +258,7 @@ class _MyAppState extends State<MyApp> {
                 weatherService: weatherService,
                 recommendationService: recommendationService,
                 locationService: locationService,
+                apiService: apiService,
                 authProvider: null, // ProxyProvider에서 업데이트됨
               ),
               update: (context, authProvider, previous) {
@@ -194,6 +284,7 @@ class _MyAppState extends State<MyApp> {
                   weatherService: weatherService,
                   recommendationService: recommendationService,
                   locationService: locationService,
+                  apiService: apiService,
                   authProvider: authProvider,
                 );
                 

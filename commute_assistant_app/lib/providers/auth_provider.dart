@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+const bool kForceMockLogin = false;
 
 class AuthProvider with ChangeNotifier {
   final ApiService apiService;
@@ -34,6 +37,32 @@ class AuthProvider with ChangeNotifier {
 
   /// 로그인
   Future<bool> login(String username, String password) async {
+    if (kForceMockLogin) {
+      _isLoggedIn = true;
+      _userId = 1;
+      _username = username;
+      _name = '테스트 사용자';
+      _commuteTime = '08:30';
+      _homeAddress = '서울시 강남구 테헤란로 123';
+      _homeLatitude = 37.4981;
+      _homeLongitude = 127.0276;
+      _workAddress = '서울시 종로구 세종대로 110';
+      _workLatitude = 37.5665;
+      _workLongitude = 126.9780;
+      _error = null;
+      notifyListeners();
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token != null && _userId != null) {
+        await apiService.saveFcmToken(_userId!, token);
+      }
+      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+        if (_userId != null) {
+          apiService.saveFcmToken(_userId!, newToken);
+        }
+      });
+      return true;
+    }
+    
     _error = null;
     notifyListeners();
 
@@ -43,6 +72,18 @@ class AuthProvider with ChangeNotifier {
       if (response['success'] == true) {
         _isLoggedIn = true;
         _userId = response['user_id'];
+
+        final token = await FirebaseMessaging.instance.getToken();
+        if (token != null && _userId != null) {
+          await apiService.saveFcmToken(_userId!, token);
+        }
+
+        FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+          if (_userId != null) {
+            apiService.saveFcmToken(_userId!, newToken);
+          }
+        });
+
         _username = response['username'];
         _name = response['name'];
         _commuteTime = response['commute_time'];

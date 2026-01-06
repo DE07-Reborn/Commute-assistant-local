@@ -66,7 +66,11 @@ class RouteKafkaConsumer:
         if remaining_sec <= 0:
             return True
         
-        total_duration_sec = int(redis_cache.get('total_duration_sec', 0))
+        cached_duration = redis_cache.get('total_duration_sec')
+        try:
+            total_duration_sec = int(cached_duration) if cached_duration is not None else 0
+        except (TypeError, ValueError):
+            total_duration_sec = 0
         return remaining_sec < total_duration_sec
     
 
